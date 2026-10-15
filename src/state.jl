@@ -13,6 +13,7 @@ Fields:
   - ess::Float64             — effective sample size
   - base_seed::Int           — base RNG seed for deterministic replication
   - n_attempts::Int          — accepted‑particle attempts this generation (diagnostic)
+  - n_resamples::Int         — cumulative number of population resamplings (diagnostic)
 """
 mutable struct ABCSMCState{C,Tθ,Tsum}
     cfg::C
@@ -24,6 +25,7 @@ mutable struct ABCSMCState{C,Tθ,Tsum}
     ess::Float64
     base_seed::Int
     n_attempts::Int
+    n_resamples::Int
 end
 
 """
@@ -36,5 +38,5 @@ function make_state(cfg::ABCSMCConfig, ::Type{Tθ}, N::Int, ε0::Float64, base_s
     θ = Vector{Tθ}(undef, N)
     w = fill(1.0 / N, N)
     summaries = Vector{Any}(undef, N)
-    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, ε0, 0, Float64(N), base_seed, 0)
+    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, ε0, 0, Float64(N), base_seed, 0, 0)
 end

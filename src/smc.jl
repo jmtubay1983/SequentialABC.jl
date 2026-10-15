@@ -139,13 +139,16 @@ function run_generation!(state::ABCSMCState, summary_obs;
     # ESS
     ess_val = ess(w_new)
 
-    # Optional resampling (if ESS < 0.5 * N)
+    # Resample population if ESS < 0.5 * N (deterministic RNG; m = −2 tags the
+    # population-level resampling draw, distinct from all other seed roles)
     if ess_val < 0.5N
-        idx = systematic_resample(w_new)
+        rng_resample = MersenneTwister(make_particle_seed(state.gen + 1, 0, 0, -2, state.base_seed))
+        idx = systematic_resample(w_new, rng_resample)
         θ_new = θ_new[idx]
         sums = sums[idx]
         fill!(w_new, 1.0 / N)
         ess_val = N
+        state.n_resamples += 1
     end
 
     # Update state

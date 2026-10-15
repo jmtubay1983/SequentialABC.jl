@@ -26,6 +26,7 @@ export ABCSimulator,
        run_generation!,
        run_smc!,
        importance_weight,
-       ess
+       ess,
+       systematic_resample
 
 end
