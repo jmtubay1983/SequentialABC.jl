@@ -1,0 +1,7 @@
+[deps]
+Agents = "46ada45e-f475-11e8-01d0-f70cc89e6671"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+SequentialABC = "9ec30f26-5bd5-453c-9fb9-4a291198e4b8"
+
+[sources]
+SequentialABC = {path = "../.."}

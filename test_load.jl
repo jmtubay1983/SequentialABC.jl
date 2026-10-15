@@ -2,6 +2,7 @@ using SequentialABC
 using Distributions
 using LinearAlgebra
 using Random
+using Statistics
 using Test
 
 println("=== SequentialABC.jl Phase‑1 smoke test (Julia ", VERSION, ") ===")
@@ -155,6 +156,132 @@ let narrow = Normal(0.0, 0.05)
     run_smc!(sB, Y_OBS; T=2, schedule=sched_p)
     @assert sA.θ == sB.θ && sA.w == sB.w "resampling path not deterministic"
     println("✓ Test 7: ESS < 0.5N triggers deterministic resampling; weights reset to 1/N")
+end
+
+# ---------------------------------------------------------------------------
+# Test 8 — checkpoint round‑trip fidelity
+# ---------------------------------------------------------------------------
+let dir = mktempdir()
+    s1 = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(s1, Y_OBS; T=2, schedule=schedule, checkpoint_dir=dir)
+
+    s_loaded = load_latest_state(dir, cfg)
+    @assert s_loaded.gen == 2 "expected gen-2 checkpoint, got gen $(s_loaded.gen)"
+    @assert s_loaded.θ == s1.θ "θ changed by round-trip"
+    @assert s_loaded.w == s1.w "w changed by round-trip"
+    @assert s_loaded.summaries == s1.summaries "summaries changed by round-trip"
+    @assert s_loaded.ε == s1.ε && s_loaded.ess == s1.ess "ε/ESS changed by round-trip"
+    @assert s_loaded.base_seed == s1.base_seed "base_seed changed by round-trip"
+    @assert s_loaded.n_attempts == s1.n_attempts && s_loaded.n_resamples == s1.n_resamples
+    println("✓ Test 8: checkpoint round-trip is lossless")
+end
+
+# ---------------------------------------------------------------------------
+# Test 9 — restart from checkpoint == uninterrupted run
+# ---------------------------------------------------------------------------
+let dir = mktempdir()
+    sA = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(sA, Y_OBS; T=2, schedule=schedule, checkpoint_dir=dir)
+
+    sB = load_latest_state(dir, cfg)               # simulates job restart
+    run_smc!(sB, Y_OBS; T=3, schedule=schedule, checkpoint_dir=dir)
+
+    @assert sB.θ == state.θ && sB.w == state.w "checkpointed restart diverged from uninterrupted run"
+    @assert sB.gen == 3
+
+    # Checkpointing itself must not perturb the trajectory
+    sC = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(sC, Y_OBS; T=3, schedule=schedule)      # no checkpoint_dir
+    @assert sC.θ == state.θ && sC.θ == sB.θ "checkpointing altered results"
+    println("✓ Test 9: checkpointed restart == uninterrupted; checkpointing alters nothing")
+end
+
+# ---------------------------------------------------------------------------
+# Test 10 — file hygiene: numbering, atomicity residue, stale .tmp, empty dir
+# ---------------------------------------------------------------------------
+let dir = mktempdir()
+    sA = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(sA, Y_OBS; T=3, schedule=schedule, checkpoint_dir=dir)
+
+    files = sort(readdir(dir))
+    @assert files == ["state_gen_001.jls", "state_gen_002.jls", "state_gen_003.jls"] "unexpected files: $files"
+
+    # Simulate a job killed mid-write: stale .tmp must be ignored by the loader
+    write(joinpath(dir, "state_gen_004.jls.tmp"), "garbage from a killed job")
+    sL = load_latest_state(dir, cfg)
+    @assert sL.gen == 3 "stale .tmp file corrupted loading (got gen $(sL.gen))"
+    @assert last(list_checkpoints(dir))[1] == 3
+
+    # Empty directory must error clearly
+    empty_dir = mktempdir()
+    @assert try; load_latest_state(empty_dir, cfg); false; catch; true; end "empty dir did not error"
+
+    println("✓ Test 10: clean generation numbering; stale .tmp ignored; empty dir errors")
+end
+
+# ---------------------------------------------------------------------------
+# Test 11 — QuantileSchedule: ε_t = median of previous population distances,
+#           monotone non-increasing, consistent with epsilon_quantile
+# ---------------------------------------------------------------------------
+let eps_hist = Float64[]
+    recording = (st, t) -> begin
+        ε = epsilon_quantile(st, 0.5)
+        push!(eps_hist, ε)
+        return ε
+    end
+    s1 = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(s1, Y_OBS; T=4, schedule=recording)
+
+    @assert length(eps_hist) == 3 "expected 3 schedule evaluations, got $(length(eps_hist))"
+    @assert issorted(eps_hist; rev=true) "ε schedule not monotone: $eps_hist"
+    @assert all(>(0), eps_hist) "ε schedule hit zero: $eps_hist"
+    @assert s1.ε == eps_hist[end]
+
+    # ε_2 must equal the median of gen-1's accepted distances
+    s2 = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    initialize!(s2, Y_OBS)
+    ε2_expected = quantile(s2.dists, 0.5)
+    run_generation!(s2, Y_OBS; ε=ε2_expected)
+    @assert isapprox(s2.ε, ε2_expected; rtol=1e-12) "ε_2 != median of gen-1 distances"
+
+    # QuantileSchedule object gives the identical trajectory
+    s3 = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(s3, Y_OBS; T=4, schedule=QuantileSchedule(0.5))
+    @assert s3.θ == s1.θ && s3.w == s1.w "QuantileSchedule(0.5) != equivalent lambda"
+
+    # Constructor validation
+    @assert try; QuantileSchedule(0.0); false; catch; true; end "q=0 accepted"
+    @assert try; QuantileSchedule(1.5); false; catch; true; end "q>1 accepted"
+    println("✓ Test 11: QuantileSchedule — median of distances, monotone, validated; ε trajectory $eps_hist")
+end
+
+# ---------------------------------------------------------------------------
+# Test 12 — dists survive checkpointing; quantile restart == uninterrupted
+# ---------------------------------------------------------------------------
+let dir = mktempdir()
+    qa = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(qa, Y_OBS; T=2, schedule=QuantileSchedule(0.5), checkpoint_dir=dir)
+
+    qb = load_latest_state(dir, cfg)
+    @assert qb.dists == qa.dists "dists changed by checkpoint round-trip"
+
+    run_smc!(qb, Y_OBS; T=4, schedule=QuantileSchedule(0.5), checkpoint_dir=dir)
+
+    qc = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(qc, Y_OBS; T=4, schedule=QuantileSchedule(0.5))
+    @assert qb.θ == qc.θ && qb.w == qc.w && qb.ε == qc.ε "quantile-scheduled restart diverged"
+    println("✓ Test 12: dists survive checkpoints; adaptive-ε restart == uninterrupted")
+end
+
+# ---------------------------------------------------------------------------
+# Test 13 — FixedSchedule == hand-rolled Toni-style lambda; validation
+# ---------------------------------------------------------------------------
+let fs = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    run_smc!(fs, Y_OBS; T=3, schedule=FixedSchedule([3.0, 1.0, 0.3]))
+    @assert fs.θ == state.θ && fs.w == state.w "FixedSchedule diverged from equivalent lambda"
+
+    @assert try; FixedSchedule([0.3, 1.0]); false; catch; true; end "increasing ε schedule accepted"
+    println("✓ Test 13: FixedSchedule == hand-rolled schedule; rejects non-monotone input")
 end
 
 println("=== ALL SMOKE TESTS PASSED ===")

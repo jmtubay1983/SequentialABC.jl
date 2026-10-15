@@ -3,12 +3,15 @@ abstract type ABCSimulator end
 """
     AgentsSimulator(model_builder, step!, summary, steps)
 
-Agents.jl backend. `model_builder(θ)` builds the model, `step!(model, rng)`
-steps it (RNG threaded explicitly — never the global RNG), `summary(model)`
-extracts the summary statistic after `steps` steps.
+Agents.jl backend. `model_builder(θ, rng)` builds the model on the given RNG
+(Agents.jl models own an rng at construction — e.g.
+`StandardABM(...; rng = rng)`, accessed via `abmrng(model)`), so the entire
+particle simulation consumes one deterministic stream. `step!(model, rng)`
+advances the model by one step, `summary(model)` extracts the summary
+statistic after `steps` steps.
 """
 struct AgentsSimulator{MB,St,Su} <: ABCSimulator
-    model_builder::MB     # θ → Agents.jl model
+    model_builder::MB     # (θ, rng) → Agents.jl model
     step!::St             # (model, rng) → nothing
     summary::Su           # model → summary
     steps::Int
@@ -28,7 +31,7 @@ struct ContinuousSimulator{MB,Ev,Su} <: ABCSimulator
 end
 
 function run_sim_once(sim::AgentsSimulator, θ, rng)
-    model = sim.model_builder(θ)
+    model = sim.model_builder(θ, rng)
     for _ in 1:sim.steps
         sim.step!(model, rng)
     end

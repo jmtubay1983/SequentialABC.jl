@@ -8,6 +8,7 @@ Fields:
   - θ::Vector{Tθ}            — particles at current generation
   - w::Vector{Float64}       — normalized importance weights
   - summaries::Vector{Tsum}  — cached summaries
+  - dists::Vector{Float64}   — cached distances d(s_i, s_obs) of accepted particles
   - ε::Float64               — current tolerance
   - gen::Int                 — current generation index
   - ess::Float64             — effective sample size
@@ -20,6 +21,7 @@ mutable struct ABCSMCState{C,Tθ,Tsum}
     θ::Vector{Tθ}
     w::Vector{Float64}
     summaries::Vector{Tsum}
+    dists::Vector{Float64}
     ε::Float64
     gen::Int
     ess::Float64
@@ -38,5 +40,6 @@ function make_state(cfg::ABCSMCConfig, ::Type{Tθ}, N::Int, ε0::Float64, base_s
     θ = Vector{Tθ}(undef, N)
     w = fill(1.0 / N, N)
     summaries = Vector{Any}(undef, N)
-    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, ε0, 0, Float64(N), base_seed, 0, 0)
+    dists = zeros(Float64, N)
+    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, dists, ε0, 0, Float64(N), base_seed, 0, 0)
 end

@@ -46,6 +46,7 @@ function initialize!(state::ABCSMCState, summary_obs;
                 # Accept: store on the raw space (prior's space)
                 state.θ[i] = θ_raw
                 state.summaries[i] = s̄
+                state.dists[i] = d
                 accepted = true
                 state.n_attempts += attempts
             end
@@ -92,6 +93,7 @@ function run_generation!(state::ABCSMCState, summary_obs;
     θ_new = similar(θ_prev, N)
     w_new = zeros(Float64, N)
     sums = Vector{Any}(undef, N)  # will be re‑typed from first accept
+    d_new = zeros(Float64, N)
 
     for i in 1:N
         attempts = 0
@@ -123,6 +125,7 @@ function run_generation!(state::ABCSMCState, summary_obs;
                 w_new[i] = importance_weight(cfg, θ_prop, θ_prev, w_prev)
                 θ_new[i] = θ_prop
                 sums[i] = s̄
+                d_new[i] = d
                 accepted = true
                 state.n_attempts += attempts
             end
@@ -146,6 +149,7 @@ function run_generation!(state::ABCSMCState, summary_obs;
         idx = systematic_resample(w_new, rng_resample)
         θ_new = θ_new[idx]
         sums = sums[idx]
+        d_new = d_new[idx]
         fill!(w_new, 1.0 / N)
         ess_val = N
         state.n_resamples += 1
@@ -154,6 +158,7 @@ function run_generation!(state::ABCSMCState, summary_obs;
     # Update state
     state.θ = θ_new
     state.w = w_new
+    state.dists = d_new
 
     # Re‑type summaries
     Tsum = typeof(sums[1])
@@ -168,23 +173,32 @@ end
 
 """
     run_smc!(state::ABCSMCState, summary_obs;
-             T::Int, schedule, M::Int=1, max_attempts::Int=10_000)
+             T::Int, schedule, M::Int=1, max_attempts::Int=10_000,
+             checkpoint_dir::Union{Nothing,AbstractString}=nothing)
 
 Run ABC‑SMC for T generations with adaptive tolerance schedule.
 
 schedule should be a function: schedule(state, t) -> ε_t
+
+If `checkpoint_dir` is given, an atomic checkpoint is written after
+initialization and after every completed generation (`state_gen_XXX.jls`).
+Restart by loading with `load_latest_state(checkpoint_dir, cfg)` and calling
+`run_smc!` again with the same directory — the run resumes from `state.gen + 1`.
 """
 function run_smc!(state::ABCSMCState, summary_obs;
-                  T::Int, schedule, M::Int=1, max_attempts::Int=10_000)
+                  T::Int, schedule, M::Int=1, max_attempts::Int=10_000,
+                  checkpoint_dir::Union{Nothing,AbstractString}=nothing)
 
     # Run generation‑1 if not already present
     if state.gen == 0
         initialize!(state, summary_obs; max_attempts=max_attempts)
+        checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     for t in (state.gen + 1):T
         ε_new = schedule(state, t)
         run_generation!(state, summary_obs; ε=ε_new, M=M, max_attempts=max_attempts)
+        checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     return state
