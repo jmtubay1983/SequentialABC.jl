@@ -7,5 +7,6 @@ using Test
     include("test_resampling.jl")
     include("test_checkpoint.jl")
     include("test_smc.jl")
+    include("regression_adjustment_tests.jl")
     include("test_examples.jl")
 end

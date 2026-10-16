@@ -16,6 +16,7 @@ include("kernels.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
+include("postprocess/RegressionAdjustment.jl")
 
 export ABCSimulator,
        AgentsSimulator,
@@ -37,6 +38,10 @@ export ABCSimulator,
        load_latest_state,
        epsilon_quantile,
        QuantileSchedule,
-       FixedSchedule
+       FixedSchedule,
+       ols_adjust,
+       local_linear_adjust,
+       adjusted_posterior,
+       RegressionAdjustment
 
 end
