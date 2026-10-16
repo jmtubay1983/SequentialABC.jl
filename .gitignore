@@ -16,3 +16,5 @@ docs/.cache/
 .vscode/
 .idea/
 repro/output/
+# Generated figures (examples write here)
+repro/plots/

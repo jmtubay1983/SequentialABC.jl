@@ -16,6 +16,7 @@ include("kernels.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
+include("plotting/PlotsAPI.jl")
 
 export ABCSimulator,
        AgentsSimulator,
@@ -37,6 +38,12 @@ export ABCSimulator,
        load_latest_state,
        epsilon_quantile,
        QuantileSchedule,
-       FixedSchedule
+       FixedSchedule,
+       plot_marginals,
+       plot_pairs,
+       plot_trace,
+       plot_diagnostics,
+       plot_ppc,
+       PlotSpec
 
 end
