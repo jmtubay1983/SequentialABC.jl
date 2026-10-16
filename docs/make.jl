@@ -13,6 +13,7 @@ makedocs(
         "Examples" => "examples.md",
         "ABC-MCMC" => "mcmc.md",
         "Adaptive kernels" => "adaptive_kernels.md",
+        "Benchmarks" => "benchmarks.md",
         "Regression adjustment" => "regression_adjustment.md",
         "Plotting" => "plots.md",
         "Design Notes" => "design.md",
