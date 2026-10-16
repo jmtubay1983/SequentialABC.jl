@@ -1,0 +1,11 @@
+# Julia coverage / memory files
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+
+# Documentation build output
+docs/build/
+docs/Manifest.toml
+
+# OS files
+.DS_Store

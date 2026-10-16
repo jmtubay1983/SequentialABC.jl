@@ -4,7 +4,8 @@ using SequentialABC
 makedocs(
     sitename = "SequentialABC.jl",
     modules = [SequentialABC],
-    format = Documenter.HTML(),
+    format = Documenter.HTML(edit_link = "main"),
+    checkdocs = :exports,
     pages = [
         "Home" => "index.md",
         "Quickstart" => "quickstart.md",

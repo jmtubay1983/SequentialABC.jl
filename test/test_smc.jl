@@ -4,8 +4,8 @@ using Distributions
 using Random
 using Statistics
 
-const PRIOR = Normal(0.0, 5.0)
-const Y_OBS = 1.0
+PRIOR = Normal(0.0, 5.0)
+Y_OBS = 1.0
 
 sample_prior = rng -> [rand(rng, PRIOR)]
 prior_logpdf = θ -> logpdf(PRIOR, θ[1])

@@ -44,10 +44,6 @@ function logistic_model(θ)
     return K / (1 + ((K - N0) / N0) * exp(-r * t))
 end
 
-model_builder(θ) = nothing  # not used directly for continuous
-evolve(problem, rng) = logistic_model(θ)  # simplified
-summary(final_state) = [final_state]
-
 sim = ContinuousSimulator(
     model_builder = θ -> θ,
     evolve = (θ, rng) -> logistic_model(θ),
@@ -55,7 +51,7 @@ sim = ContinuousSimulator(
 )
 
 # --- 4. Configuration -------------------------------------------------------
-Σ = [0.01]  # perturbation covariance (1-D)
+Σ = [0.01;;]  # perturbation covariance (1×1 matrix)
 cfg = ABCSMCConfig(
     prior, sample_prior, transform, distance,
     GaussianKernel(), Σ, sim,
@@ -66,10 +62,10 @@ N = 100        # population size
 ε0 = 5.0       # initial tolerance
 base_seed = 42 # deterministic base seed
 
-state = make_state(cfg, Float64, N, ε0, base_seed)
+state = make_state(cfg, Vector{Float64}, N, ε0, base_seed)
 
-# Observed summary
-s_obs = [logistic_model([0.8]) + 0.1 * randn()]  # noisy observation
+# Observed summary (seeded — the global RNG is never used by this package)
+s_obs = [logistic_model([0.8]) + 0.1 * randn(MersenneTwister(2024))]  # noisy observation
 
 # --- 6. Run ABC‑SMC ---------------------------------------------------------
 schedule = QuantileSchedule(0.5)  # adaptive ε: median of accepted distances

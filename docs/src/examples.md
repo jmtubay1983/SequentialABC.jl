@@ -14,11 +14,11 @@ Infers the growth rate \(r\) of a logistic model from a noisy observation.
 N(t) = \frac{K}{1 + \left(\frac{K - N_0}{N_0}\right) e^{-r t}}
 \]
 
-with \(K = 100\), \(N_0 = 1\), observed at \(t = 3\).
+with \(K = 100\), \(N_0 = 10\), observed at \(t = 3\).
 
 ### Prior
 
-\(r \sim \text{Uniform}(0, 1)\)
+\(r \sim \text{Uniform}(0.1, 1.5)\)
 
 ### Distance
 

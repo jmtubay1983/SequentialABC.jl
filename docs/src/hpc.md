@@ -45,7 +45,7 @@ For parameter sweeps or multiple independent runs, use a Slurm array job. Each a
 
 ```julia
 base_seed = 1000 + parse(Int, ENV["SLURM_ARRAY_TASK_ID"])
-state = make_state(cfg, Float64, N, ε0, base_seed)
+state = make_state(cfg, Vector{Float64}, N, ε0, base_seed)
 run_smc!(state, s_obs; T=50, schedule=schedule, checkpoint_dir="checkpoints/run_$(ENV["SLURM_ARRAY_TASK_ID"])")
 ```
 

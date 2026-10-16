@@ -1,7 +1,9 @@
-name = "SequentialABCDocs"
-uuid = "b7c5e2c8-a1d3-4e9f-9c7a-3e2b1f8a9c4d"
-version = "0.1.0"
-
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SequentialABC = "9ec30f26-5bd5-453c-9fb9-4a291198e4b8"
+
+[compat]
+Documenter = "1.19.0"
+
+[sources]
+SequentialABC = {path = ".."}
