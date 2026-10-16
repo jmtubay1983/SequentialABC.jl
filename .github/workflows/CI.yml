@@ -3,29 +3,29 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['*']
   pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        version: ['1.10']
-        os: [ubuntu-latest]
+    name: Julia 1.13 (ubuntu-latest)
+    runs-on: ubuntu-latest
+    env:
+      JULIA_PROJECT: '@.'
     steps:
       - uses: actions/checkout@v4
+
       - uses: julia-actions/setup-julia@v2
         with:
-          version: ${{ matrix.version }}
-      - uses: julia-actions/cache@v2
-      - name: Build package
-        uses: julia-actions/julia-buildpkg@v1
-      - name: Run tests
-        uses: julia-actions/julia-runtest@v1
+          version: '1.13'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia
+            ~/.cache
+          key: ${{ runner.os }}-julia-${{ hashFiles('**/Project.toml', '**/Manifest.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-
+
+      - name: Instantiate, build, and test
+        run: julia -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test()'
