@@ -59,6 +59,30 @@ thumb factor, `Σ = scaling_factor(d; rule) · Σ̂`.
 The estimate itself is anisotropic — every dimension keeps its own variance and
 the correlations are preserved — so per‑dimension scaling comes for free.
 
+## Online (streaming) estimation
+
+`estimate_covariance` needs the whole population in memory. `OnlineCovEstimator`
+produces the *same* estimate from one particle at a time, with \(O(d^2)\) memory,
+using Welford's algorithm for weighted populations:
+
+```julia
+est = OnlineCovEstimator(d)          # shrink defaults to 1e-6
+for (θ, w) in zip(population, weights)
+    update!(est, θ, w)               # incremental, one particle at a time
+end
+Σ̂ = cov(est)                         # == estimate_covariance(population, weights)
+reset!(est)                          # reuse for the next generation
+```
+
+The mean is updated incrementally and the second moment uses both the old and the
+new mean, so there is no \(E[\theta\theta^\top] - \mu\mu^\top\) cancellation.
+`cov` applies the same shrinkage as the batch estimator and then an **eigenvalue
+floor** \(\lambda_{\min} = \max(\texttt{shrink}, (\operatorname{tr}\Sigma)/d
+\cdot 10^{-8}, \epsilon)\), which makes the returned matrix positive definite
+unconditionally — even after a single sample. A population with fewer than two
+effective samples (or exactly coincident particles) reports a zero‑variance raw
+estimate, which the floor regularises and `commit!` refuses to adopt.
+
 ## Adaptive ABC-SMC
 
 `ABCSMCConfig` is immutable, so the way to install a new covariance is to rebuild
@@ -82,6 +106,22 @@ configuration type, so the reassignment is type‑stable. `kernel.n_updates` cou
 how many adaptations were applied, and a degenerate population is ignored rather
 than adopted (a zero‑variance kernel would freeze the sampler).
 
+The streaming form trades the population copy for an accumulator:
+
+```julia
+for i in eachindex(state.θ)
+    update!(kernel, state.θ[i], state.w[i])   # accumulate, O(d²) memory
+end
+commit!(kernel)                               # adopt Σ, reset the accumulator
+state.cfg = with_covariance(state.cfg, kernel)
+```
+
+Committing at the **generation boundary** is deliberate: every importance weight
+of a generation is computed with that generation's kernel, so a \(\Sigma\) that
+changed halfway through would make the weights inconsistent. The accumulation is
+streaming; the adoption is per generation. Passing an `OnlineCovEstimator`
+directly — `update!(kernel, est)` — copies it in and commits immediately.
+
 ## Adaptive ABC-MCMC
 
 The chain's proposal is `cfg.Σ`, so the adapted covariance is installed the same
@@ -104,15 +144,18 @@ the stationary distribution and is deliberately out of scope here.
 
 ## Example
 
-A runnable comparison lives in `examples/adaptive_kernel_example.jl`:
+Two runnable scripts:
 
 ```bash
-julia --project=. examples/adaptive_kernel_example.jl
+julia --project=. examples/adaptive_kernel_example.jl   # fixed vs adapted Σ
+julia --project=. examples/online_kernel_example.jl    # streaming vs batch adaptation
 ```
 
-It runs the same ABC‑SMC problem twice from a deliberately badly scaled
+The first runs the same ABC‑SMC problem twice from a deliberately badly scaled
 \(\Sigma_0\), once fixed and once adapted, and then reuses the adapted covariance
-as the ABC‑MCMC proposal.
+as the ABC‑MCMC proposal. The second shows that the streaming estimator matches
+the batch estimate to machine precision and runs the same SMC problem with both
+update forms.
 
 ## References
 
@@ -120,12 +163,18 @@ as the ABC‑MCMC proposal.
   approximate Bayesian computation. *Biometrika*, 96(4), 983–990.
 - Gelman, A., Roberts, G. O., & Gilks, W. R. (1996). Efficient Metropolis jumping
   rules. *Bayesian Statistics 5*, 599–607.
+- Welford, B. P. (1962). Note on a method for calculating corrected sums of
+  squares and products. *Technometrics*, 4(3), 419–420.
 
 ## API
 
 ```@docs
 AdaptiveKernel
+OnlineCovEstimator
 update!
+commit!
+reset!
+cov
 estimate_covariance
 adaptive_scale
 scaling_factor
