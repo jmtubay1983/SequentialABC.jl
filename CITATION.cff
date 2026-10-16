@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the following metadata."
+title: "SequentialABC.jl"
+version: "0.1.0"
+doi: "DOI_GOES_HERE"
+authors:
+  - family-names: "Tubay"
+    given-names: "Jerrold"
+date-released: "2026-10-16"
+url: "https://github.com/jmtubay1983/SequentialABC.jl"
