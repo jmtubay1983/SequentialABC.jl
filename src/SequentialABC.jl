@@ -17,6 +17,7 @@ include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
 include("postprocess/RegressionAdjustment.jl")
+include("plotting/PlotsAPI.jl")
 
 export ABCSimulator,
        AgentsSimulator,
@@ -42,6 +43,12 @@ export ABCSimulator,
        ols_adjust,
        local_linear_adjust,
        adjusted_posterior,
-       RegressionAdjustment
+       RegressionAdjustment,
+       plot_marginals,
+       plot_pairs,
+       plot_trace,
+       plot_diagnostics,
+       plot_ppc,
+       PlotSpec
 
 end
