@@ -1,11 +1,17 @@
-# Julia coverage / memory files
+# Docs environment artifacts
+docs/Manifest.toml
+docs/build/
+docs/.cache/
+
+# Julia artifacts
+.julia/
+.julia_history
+.julia_build/
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
 
-# Documentation build output
-docs/build/
-docs/Manifest.toml
-
-# OS files
+# OS / editor
 .DS_Store
+.vscode/
+.idea/
