@@ -1,0 +1,56 @@
+name: Benchmarks
+
+# Tiny smoke benchmark on every PR; the full run on demand (Actions → Benchmarks
+# → Run workflow). Nothing here is a required check, and the tiny mode is short
+# enough not to slow reviews down.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Benchmark mode
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - standard
+          - tiny
+
+jobs:
+  benchmark:
+    name: compare engines (${{ inputs.mode || 'tiny' }})
+    runs-on: ubuntu-latest
+    env:
+      JULIA_PROJECT: '@.'
+      MODE: ${{ github.event_name == 'pull_request' && 'tiny' || inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia
+            ~/.cache
+          key: ${{ runner.os }}-julia-${{ hashFiles('**/Project.toml', '**/Manifest.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-
+
+      - name: Instantiate
+        run: julia -e 'using Pkg; Pkg.instantiate(); Pkg.build()'
+
+      - name: Run benchmark (${{ env.MODE }})
+        run: julia bench/compare_engines.jl --mode "$MODE" --out bench/results
+
+      - name: Upload benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ env.MODE }}
+          path: bench/results/
+          if-no-files-found: warn
