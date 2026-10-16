@@ -1,12 +1,11 @@
 # Quickstart
 
-Run your first ABC‑SMC inference in about 20 lines of Julia. This guide covers:
+Run your first ABC‑SMC inference in a few lines of Julia. This guide covers:
 
 1. Defining the model and prior
 2. Building the config
-3. Creating the initial state
-4. Running the sampler
-5. Checkpointing and restarting
+3. Running the sampler
+4. Checkpointing and restarting
 
 ## A continuous (logistic growth) example
 
@@ -57,35 +56,42 @@ cfg = ABCSMCConfig(
     GaussianKernel(), Σ, sim,
 )
 
-# --- 5. Initial state -------------------------------------------------------
+# --- 5. Run ABC‑SMC ---------------------------------------------------------
 N = 100        # population size
-ε0 = 5.0       # initial tolerance
+T = 5          # generations, including generation 1
 base_seed = 42 # deterministic base seed
-
-state = make_state(cfg, Vector{Float64}, N, ε0, base_seed)
 
 # Observed summary (seeded — the global RNG is never used by this package)
 s_obs = [logistic_model([0.8]) + 0.1 * randn(MersenneTwister(2024))]  # noisy observation
 
-# --- 6. Run ABC‑SMC ---------------------------------------------------------
 schedule = QuantileSchedule(0.5)  # adaptive ε: median of accepted distances
 
-run_smc!(state, s_obs; T=5, schedule=schedule, M=1)
+state = run_smc(cfg, s_obs; N=N, T=T, schedule=schedule, base_seed=base_seed)
 
-println("Final ε   = ", state.ε)
-println("Final ESS = ", state.ess)
+println("Final ε    = ", state.ε)
+println("Final ESS  = ", state.ess)
 println("Generation = ", state.gen)
 ```
+
+`run_smc` builds the state, samples generation 1 and advances to generation `T`
+for you; it mirrors `run_mcmc(cfg, s_obs; n_samples, ε)`. By default generation 1
+is a plain prior sample (`ε0 = Inf`), and the schedule fixes the tolerance from
+generation 2 onwards. Pass a finite `ε0` to start from a tighter, pre‑filtered
+population instead, and `Tθ` to override the inferred parameter type (it is
+otherwise obtained from one discarded prior draw).
 
 ## Checkpointing and restart
 
 For long runs on an HPC cluster, enable checkpointing:
 
 ```julia
-run_smc!(state, s_obs; T=20, schedule=schedule, checkpoint_dir="checkpoints/")
+state = run_smc(cfg, s_obs; N=N, T=20, schedule=schedule,
+                checkpoint_dir="checkpoints/")
 ```
 
-If the job is preempted, resume from the latest checkpoint:
+If the job is preempted, resume from the latest checkpoint — note this uses the
+state‑based [`run_smc!`](@ref), which continues from `state.gen + 1` rather than
+starting over:
 
 ```julia
 state = load_latest_state("checkpoints/", cfg)
