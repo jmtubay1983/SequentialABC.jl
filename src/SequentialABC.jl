@@ -13,6 +13,7 @@ include("state.jl")
 include("schedules.jl")
 include("rng.jl")
 include("kernels.jl")
+include("kernels/AdaptiveKernel.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
@@ -26,6 +27,12 @@ export ABCSimulator,
        ABCSMCConfig,
        ABCSMCState,
        GaussianKernel,
+       AdaptiveKernel,
+       update!,
+       estimate_covariance,
+       adaptive_scale,
+       scaling_factor,
+       with_covariance,
        make_state,
        make_particle_seed,
        initialize!,
