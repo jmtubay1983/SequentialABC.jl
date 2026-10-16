@@ -213,60 +213,73 @@ function _render_impl(kind::Symbol, data::NamedTuple, opts::NamedTuple, Plots, S
         ps = map(1:d) do j
             p = Plots.histogram(data.values[:, j];
                 weights = data.weights, bins = nb, normalize = :pdf,
-                alpha = 0.6, legend = false,
+                alpha = 0.6, legend = false, framestyle = :box,
                 title = data.labels[j], xlabel = data.labels[j], ylabel = "density")
             Plots.vline!(p, [data.means[j]]; color = :red, linewidth = 2)
             return p
         end
-        return Plots.plot(ps...; layout = (1, d), size = (360 * d, 320),
-                          plot_title = "Marginal posteriors", top_margin = 8Plots.mm)
+        return Plots.plot(ps...; layout = (1, d), size = (360 * d, 340),
+                          plot_title = "Marginal posteriors", top_margin = 8Plots.mm,
+                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
+                          bottom_margin = 6Plots.mm)
 
     elseif kind === :pairs
         d = size(data.values, 2)
         A = data.values[data.resample, :]
         if StatsPlots !== nothing && d > 1
             try
-                return StatsPlots.cornerplot(A)
+                return StatsPlots.cornerplot(A; framestyle = :box)
             catch
                 # fall back to a plain scatter matrix below
             end
         end
         if d == 1
             return Plots.histogram(A[:, 1]; normalize = :pdf, legend = false,
+                                   framestyle = :box,
                                    title = data.labels[1], plot_title = "Pairwise posteriors")
         end
         pairs = [(i, j) for i in 1:d for j in (i + 1):d]
         ps = map(pairs) do (i, j)
             Plots.scatter(A[:, j], A[:, i]; markersize = 2, alpha = 0.5, legend = false,
+                          framestyle = :box,
                           xlabel = data.labels[j], ylabel = data.labels[i])
         end
         return Plots.plot(ps...; layout = (1, length(ps)),
-                          size = (320 * length(ps), 320), plot_title = "Pairwise posteriors")
+                          size = (320 * length(ps), 340), plot_title = "Pairwise posteriors",
+                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
+                          bottom_margin = 6Plots.mm)
 
     elseif kind === :trace
         return Plots.plot(data.gens, data.means;
             label = permutedims(data.labels), marker = :circle, linewidth = 2,
+            framestyle = :box,
             xlabel = "generation", ylabel = "posterior mean",
             plot_title = "Parameter trace (weighted means)")
 
     elseif kind === :diagnostics
         p1 = Plots.plot(data.gens, data.epsilons; label = "ε", marker = :circle,
-                        linewidth = 2, xlabel = "generation", ylabel = "ε", title = "Tolerance")
+                        linewidth = 2, framestyle = :box,
+                        xlabel = "generation", ylabel = "ε", title = "Tolerance")
         p2 = Plots.plot(data.gens, data.ess; label = "ESS", marker = :circle,
-                        linewidth = 2, xlabel = "generation", ylabel = "ESS",
+                        linewidth = 2, framestyle = :box,
+                        xlabel = "generation", ylabel = "ESS",
                         title = "Effective sample size")
         p3 = Plots.plot(data.gens, data.attempts; label = "attempts", marker = :circle,
-                        linewidth = 2, xlabel = "generation", ylabel = "attempts",
+                        linewidth = 2, framestyle = :box,
+                        xlabel = "generation", ylabel = "attempts",
                         title = "Simulation attempts")
-        return Plots.plot(p1, p2, p3; layout = (1, 3), size = (960, 330),
+        return Plots.plot(p1, p2, p3; layout = (1, 3), size = (960, 340),
                           plot_title = "ABC‑SMC diagnostics",
                           plot_titlefontsize = 14, plot_titlevspan = 0.14,
-                          top_margin = 6Plots.mm)
+                          top_margin = 6Plots.mm,
+                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
+                          bottom_margin = 6Plots.mm)
 
     elseif kind === :ppc
         nb = get(opts, :nbins, 20)
         p = Plots.histogram(data.simulated; bins = nb, normalize = :pdf, alpha = 0.6,
-                            label = "posterior predictive", xlabel = "summary",
+                            framestyle = :box, label = "posterior predictive",
+                            xlabel = "summary",
                             ylabel = "density", plot_title = "Posterior predictive check")
         Plots.vline!(p, [data.observed]; label = "observed", color = :red, linewidth = 2)
         return p
