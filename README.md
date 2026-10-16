@@ -18,7 +18,7 @@ faithfully, with the practical features real simulation studies need:
 - **Pluggable simulators** — one abstraction for agent-based (Agents.jl) and
   continuous (ODE/PDE/SSA) models.
 
-Requires **Julia ≥ 1.10** (developed and tested on 1.13.2).
+Requires **Julia ≥ 1.11** (developed and tested on 1.13.2).
 
 ## Installation
 
