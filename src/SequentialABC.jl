@@ -16,6 +16,7 @@ include("kernels.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
+include("engines/MCMC.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
@@ -40,6 +41,12 @@ export ABCSimulator,
        epsilon_quantile,
        QuantileSchedule,
        FixedSchedule,
+       run_mcmc,
+       ABCMCMCChain,
+       acceptance_rate,
+       abc_mcmc_accept,
+       mcmc_propose,
+       mcmc_log_proposal,
        ols_adjust,
        local_linear_adjust,
        adjusted_posterior,

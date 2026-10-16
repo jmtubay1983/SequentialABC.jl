@@ -11,6 +11,7 @@ makedocs(
         "Quickstart" => "quickstart.md",
         "API Reference" => "api.md",
         "Examples" => "examples.md",
+        "ABC-MCMC" => "mcmc.md",
         "Regression adjustment" => "regression_adjustment.md",
         "Plotting" => "plots.md",
         "Design Notes" => "design.md",
