@@ -1,5 +1,7 @@
 # SequentialABC.jl
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23415967.svg)](https://doi.org/10.5281/zenodo.23415967)
+
 A small, project-owned **ABC-SMC** (Approximate Bayesian Computation with
 Sequential Monte Carlo) package for Julia, implementing the algorithm of
 [Toni et al. (2009)](https://royalsocietypublishing.org/doi/10.1098/rsif.2008.0172)
