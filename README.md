@@ -147,6 +147,8 @@ restartability (interrupted == uninterrupted), gen-1 uniform weights,
 systematic-resampling unit tests, forced ESS-collapse resampling, checkpoint
 round-trips and file hygiene, adaptive-ε monotonicity and restart equivalence.
 
+Note: docs/Manifest.toml is ignored.
+
 ## Slurm
 
 The deterministic seed scheme plus generation-indexed checkpoints give you a

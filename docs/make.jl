@@ -14,10 +14,10 @@ makedocs(
         "Design Notes" => "design.md",
         "HPC / Slurm" => "hpc.md",
     ],
-    repo = "https://github.com/tubay001/SequentialABC.jl.git",
+    repo = "https://github.com/jmtubay1983/SequentialABC.jl.git",
 )
 
 deploydocs(
-    repo = "github.com/tubay001/SequentialABC.jl.git",
+    repo = "github.com/jmtubay1983/SequentialABC.jl.git",
     devbranch = "main",
 )
