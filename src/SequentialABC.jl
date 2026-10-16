@@ -16,6 +16,7 @@ include("kernels.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
+include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
 export ABCSimulator,
@@ -39,6 +40,10 @@ export ABCSimulator,
        epsilon_quantile,
        QuantileSchedule,
        FixedSchedule,
+       ols_adjust,
+       local_linear_adjust,
+       adjusted_posterior,
+       RegressionAdjustment,
        plot_marginals,
        plot_pairs,
        plot_trace,
