@@ -218,10 +218,14 @@ function _render_impl(kind::Symbol, data::NamedTuple, opts::NamedTuple, Plots, S
             Plots.vline!(p, [data.means[j]]; color = :red, linewidth = 2)
             return p
         end
-        return Plots.plot(ps...; layout = (1, d), size = (360 * d, 340),
-                          plot_title = "Marginal posteriors", top_margin = 8Plots.mm,
-                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
-                          bottom_margin = 6Plots.mm)
+        layout_opts = (layout = (1, d), size = (360 * d, 340),
+                       plot_title = "Marginal posteriors", top_margin = 8Plots.mm,
+                       left_margin = 5Plots.mm, right_margin = 3Plots.mm,
+                       bottom_margin = 6Plots.mm)
+        # with a single panel the subplot title sits directly under the layout
+        # title, so reserve some vertical space for the latter
+        d == 1 && (layout_opts = merge(layout_opts, (plot_titlevspan = 0.12,)))
+        return Plots.plot(ps...; layout_opts...)
 
     elseif kind === :pairs
         d = size(data.values, 2)
