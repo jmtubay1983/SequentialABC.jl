@@ -1,5 +1,7 @@
 using Serialization
 
+import SequentialABC: SEED_SCHEMA_VERSION
+
 const CHECKPOINT_RE = r"^state_gen_(\d+)\.jls$"
 
 _checkpoint_name(gen::Int) = "state_gen_" * lpad(string(gen), 3, '0') * ".jls"
@@ -33,7 +35,8 @@ function save_checkpoint(state::ABCSMCState, dir::AbstractString)
             ess = state.ess,
             base_seed = state.base_seed,
             n_attempts = state.n_attempts,
-            n_resamples = state.n_resamples)
+            n_resamples = state.n_resamples,
+            seed_schema_version = SEED_SCHEMA_VERSION)
 
     open(tmp, "w") do io
         serialize(io, data)
@@ -68,6 +71,20 @@ intentionally not serialized — checkpoints carry data only).
 """
 function load_checkpoint(path::AbstractString, cfg)
     data = open(deserialize, path)
+    # Validate seed schema version before reconstructing state. Checkpoints
+    # created under a different make_particle_seed schema cannot be replayed
+    # because the seed stream (and thus every RNG draw) differs.
+    if !hasproperty(data, :seed_schema_version)
+        error("Checkpoint at $path is missing the `seed_schema_version` field — " *
+              "it was saved with a version of SequentialABC.jl that did not " *
+              "version the seed derivation. Re-run from scratch with the current code.")
+    elseif data.seed_schema_version != SEED_SCHEMA_VERSION
+        error("Checkpoint at $path has seed_schema_version=" *
+              "$(data.seed_schema_version), but the current SEED_SCHEMA_VERSION is " *
+              "$SEED_SCHEMA_VERSION. The seed derivation function changed between " *
+              "these versions, so the checkpoint's RNG stream cannot be reproduced. " *
+              "Re-run from scratch with the current code.")
+    end
     Tθ   = eltype(data.θ)          # struct parameters hold ELEMENT types (fields are Vector{Tθ})
     Tsum = eltype(data.summaries)
     return ABCSMCState{typeof(cfg), Tθ, Tsum}(

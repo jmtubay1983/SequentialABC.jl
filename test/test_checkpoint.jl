@@ -1,7 +1,9 @@
 using SequentialABC
+import SequentialABC: SEED_SCHEMA_VERSION
 using Test
 using Distributions
 using Random
+using Serialization
 
 PRIOR = Normal(0.0, 5.0)
 Y_OBS = 1.0
@@ -45,6 +47,53 @@ N = 100
     @test state2.w == state.w
     @test state2.dists == state.dists
     @test state2.summaries == state.summaries
+end
+
+@testset "Checkpoint seed_schema_version validation" begin
+    dir = mktempdir()
+
+    state = make_state(cfg, Vector{Float64}, N, 3.0, 1234)
+    initialize!(state, Y_OBS)
+    path = save_checkpoint(state, dir)
+
+    # A checkpoint saved with the current schema version loads cleanly.
+    loaded = load_checkpoint(path, cfg)
+    @test loaded.gen == state.gen
+
+    # A checkpoint with a different seed_schema_version must be rejected.
+    bad_version_dir = mktempdir()
+    bad_path = joinpath(bad_version_dir, "state_gen_001.jls")
+    open(bad_path, "w") do io
+        serialize(io, (θ = state.θ,
+                       w = state.w,
+                       summaries = state.summaries,
+                       dists = state.dists,
+                       ε = state.ε,
+                       gen = state.gen,
+                       ess = state.ess,
+                       base_seed = state.base_seed,
+                       n_attempts = state.n_attempts,
+                       n_resamples = state.n_resamples,
+                       seed_schema_version = SEED_SCHEMA_VERSION + 1))
+    end
+    @test_throws ErrorException load_checkpoint(bad_path, cfg)
+
+    # A checkpoint missing seed_schema_version entirely must be rejected.
+    no_version_dir = mktempdir()
+    no_version_path = joinpath(no_version_dir, "state_gen_001.jls")
+    open(no_version_path, "w") do io
+        serialize(io, (θ = state.θ,
+                       w = state.w,
+                       summaries = state.summaries,
+                       dists = state.dists,
+                       ε = state.ε,
+                       gen = state.gen,
+                       ess = state.ess,
+                       base_seed = state.base_seed,
+                       n_attempts = state.n_attempts,
+                       n_resamples = state.n_resamples))
+    end
+    @test_throws ErrorException load_checkpoint(no_version_path, cfg)
 end
 
 @testset "list_checkpoints ordering and filtering" begin
