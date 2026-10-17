@@ -15,6 +15,7 @@ makedocs(
         "Population Monte Carlo" => "pmc.md",
         "Adaptive kernels" => "adaptive_kernels.md",
         "Summary statistics" => "summaries.md",
+        "Distances" => "distances.md",
         "Benchmarks" => "benchmarks.md",
         "Regression adjustment" => "regression_adjustment.md",
         "Plotting" => "plots.md",
