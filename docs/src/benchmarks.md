@@ -1,8 +1,8 @@
 # Benchmarks
 
-`bench/compare_engines.jl` runs the two samplers — ABC‑SMC and ABC‑MCMC — against
-a reference problem whose exact posterior is known in closed form, and reports
-what each kernel choice actually buys:
+`bench/compare_engines.jl` runs the three engines — ABC‑SMC, ABC‑PMC and
+ABC‑MCMC — against a reference problem whose exact posterior is known in closed
+form, and reports what each kernel choice actually buys:
 
 | row | what it tests |
 |---|---|
@@ -10,6 +10,7 @@ what each kernel choice actually buys:
 | `SMC fixed (oracle 2Σ*)` | \(2\Sigma^\*\) of the *exact* posterior: the best a hand‑tuned fixed kernel can do |
 | `SMC adaptive (batch)` | \(\Sigma\) re‑estimated from the population, one call per generation |
 | `SMC adaptive (streaming)` | the same, one particle at a time, committed at the generation boundary |
+| `PMC (2Σ_{t-1}, no resample)` | [Population Monte Carlo](pmc.md): the same adaptive covariance recipe, but the population is never resampled |
 | `MCMC fixed (Σ0)`, `MCMC fixed (oracle)`, `MCMC adaptive (pre-run)` | the chain's random‑walk proposal, fixed or adapted |
 
 The point is not to prove that adaptation helps — that is the design of
@@ -66,9 +67,11 @@ CSV of the raw metrics; nothing is committed (the directory is ignored).
 Seeds are pinned, so the statistics are identical in every repetition and only
 the wall clock varies — the table reports the **minimum** time. The script ends
 with hard assertions (structural invariants; the streamed and batched estimators
-must agree; adaptation must beat the badly scaled kernel; and every posterior mean
-must be consistent with the exact posterior within five Monte‑Carlo standard
-errors), so a regression fails the run rather than printing a plausible table.
+must agree; the PMC row must never resample and, whenever the SMC row does not
+either, must agree with it exactly; adaptation must beat the badly scaled kernel;
+and every posterior mean must be consistent with the exact posterior within five
+Monte‑Carlo standard errors), so a regression fails the run rather than printing a
+plausible table.
 
 ## Results
 
@@ -87,18 +90,20 @@ ladder      4.0 → 2.5264 → 1.8718 → 1.4074 → 1.0491 → 0.7874 → 0.611
 
 | engine | sims | wall (s) | ESS | resamp | ε | accept | RMSE | mc se | cov err | Σ₁₁ |
 |---|---|---|---|---|---|---|---|---|---|---|
-| SMC fixed (Σ0) | 82126 | 6.08 | 783.9 | 0 | 0.465 | — | 0.0189 | 0.0192 | 0.241 | 4.0000 |
-| SMC fixed (oracle 2Σ\*) | 25709 | 2.72 | 718.9 | 0 | 0.465 | — | 0.0467 | 0.0198 | 0.206 | 0.4706 |
-| SMC adaptive (batch) | 32723 | 3.35 | 718.3 | 0 | 0.465 | — | 0.0090 | 0.0208 | 0.321 | 4.0000 |
-| SMC adaptive (streaming) | 32723 | 3.25 | 718.3 | 0 | 0.465 | — | 0.0090 | 0.0208 | 0.321 | 4.0000 |
-| MCMC fixed (Σ0) | 10064 | 0.56 | 81.2 | 0 | 0.465 | 0.023 | 0.0069 | 0.0575 | 0.240 | 4.0000 |
-| MCMC fixed (oracle) | 10064 | 0.55 | 143.8 | 0 | 0.465 | 0.084 | 0.0311 | 0.0448 | 0.236 | 0.6664 |
-| MCMC adaptive (pre-run) | 10064 | 0.54 | 231.9 | 0 | 0.465 | 0.069 | 0.0522 | 0.0350 | 0.211 | 0.8464 |
+| SMC fixed (Σ0) | 82126 | 5.12 | 783.9 | 0 | 0.465 | — | 0.0189 | 0.0192 | 0.241 | 4.0000 |
+| SMC fixed (oracle 2Σ\*) | 25709 | 2.32 | 718.9 | 0 | 0.465 | — | 0.0467 | 0.0198 | 0.206 | 0.4706 |
+| SMC adaptive (batch) | 32723 | 2.72 | 718.3 | 0 | 0.465 | — | 0.0090 | 0.0208 | 0.321 | 0.5845 |
+| SMC adaptive (streaming) | 32723 | 2.73 | 718.3 | 0 | 0.465 | — | 0.0090 | 0.0208 | 0.321 | 0.5845 |
+| PMC (2Σ\_{t-1}, no resample) | 32723 | 2.79 | 718.3 | 0 | 0.465 | — | 0.0090 | 0.0208 | 0.321 | 0.5845 |
+| MCMC fixed (Σ0) | 10064 | 0.52 | 81.2 | 0 | 0.465 | 0.023 | 0.0069 | 0.0575 | 0.240 | 4.0000 |
+| MCMC fixed (oracle) | 10064 | 0.47 | 143.8 | 0 | 0.465 | 0.084 | 0.0311 | 0.0448 | 0.236 | 0.6664 |
+| MCMC adaptive (pre-run) | 10064 | 0.48 | 231.9 | 0 | 0.465 | 0.069 | 0.0522 | 0.0350 | 0.211 | 0.8464 |
 
 `sims` = simulator calls; `wall (s)` = minimum over the repetitions; `ESS` = the
-final population's ESS (ABC‑SMC) or Geyer's initial‑positive‑sequence estimate,
-minimised over dimensions (ABC‑MCMC); `mc se` = Monte‑Carlo standard error of the
-posterior mean; `Σ₁₁` = the kernel the row actually used.
+final population's ESS (ABC‑SMC and ABC‑PMC) or Geyer's initial‑positive‑sequence
+estimate, minimised over dimensions (ABC‑MCMC); `mc se` = Monte‑Carlo standard
+error of the posterior mean; `Σ₁₁` = the kernel the row actually used (for the
+adaptive rows, the covariance of the last generation).
 
 ### What the numbers say
 
@@ -124,9 +129,18 @@ posterior mean; `Σ₁₁` = the kernel the row actually used.
 - **Streaming and batch agree exactly.** Both adaptation paths produce the same
   simulation count, the same population and the same posterior mean to within
   \(2\times10^{-15}\) — floating‑point noise. This is asserted, not just reported.
-- **Accuracy is not the differentiator.** Every SMC row ran the *same* tolerance
+- **The PMC row reproduces the adaptive SMC row — exactly.** Both ran the same
+  ladder with the same \(2\Sigma_{t-1}\) recipe, and this problem never pushed the
+  SMC ESS below its \(0.5N\) resampling trigger (see `resamp = 0`): with the
+  resampling step out of the picture the two engines take the same path through
+  the same seeds, so they agree to the last digit. That is not a redundant row but
+  a cross‑check between two independent code paths, and the harness asserts it.
+  The engines diverge exactly when resampling fires, which is why
+  `test/pmc_tests.jl` includes a degenerate‑weight case where ABC‑SMC resamples
+  and PMC reports the resulting weight degeneracy instead of hiding it.
+- **Accuracy is not the differentiator.** Every SMC/PMC row ran the *same* tolerance
   ladder and every MCMC row the same \(\varepsilon\), and all `RMSE` values sit at
-  or below `mc se`; the maximum `RMSE / mc se` over the seven rows is 2.36, well
+  or below `mc se`; the maximum `RMSE / mc se` over the eight rows is 2.36, well
   inside the five‑standard‑error consistency bound. Different kernels buy the
   same posterior at different prices.
 
@@ -137,8 +151,8 @@ posterior mean; `Σ₁₁` = the kernel the row actually used.
 up targeting *different* posteriors — a well‑mixing kernel shrinks \(\varepsilon\)
 faster and would be penalised for it. The harness therefore calibrates a ladder
 once (an adaptive run at \(2N\) particles, so it is well mixed and tight) and
-runs every SMC row at those tolerances. The MCMC rows share the ladder's final
-\(\varepsilon\).
+runs every SMC and PMC row at those tolerances. The MCMC rows share the ladder's
+final \(\varepsilon\).
 
 **Adaptation is frozen before the chain runs.** The MCMC proposal is estimated
 from the ABC‑SMC population once and then held fixed. Adapting a proposal from
@@ -151,8 +165,10 @@ recommendation as [Adaptive kernels](adaptive_kernels.md).
 - **ESS is not comparable across engines.** For ABC‑SMC it measures weight
   degeneracy in the final generation (and is reset to \(N\) whenever the
   population is resampled — the `resamp` column shows this did not happen here).
-  For ABC‑MCMC it is an autocorrelation‑based effective sample size of the whole
-  chain. Use each within its own column, not as a cross‑engine score.
+  ABC‑PMC never resamples, so its ESS is always the true weighted ESS, which is
+  the stricter number. For ABC‑MCMC it is an autocorrelation‑based effective
+  sample size of the whole chain. Use each within its own column, not as a
+  cross‑engine score.
 - **`tiny` mode is a smoke test.** With \(T = 4\) generations the tolerance only
   reaches \(\varepsilon \approx 1.3\), far larger than \(\sigma = 0.5\): the ABC
   posterior is then dominated by smoothing and the accuracy columns say almost

@@ -12,6 +12,7 @@ makedocs(
         "API Reference" => "api.md",
         "Examples" => "examples.md",
         "ABC-MCMC" => "mcmc.md",
+        "Population Monte Carlo" => "pmc.md",
         "Adaptive kernels" => "adaptive_kernels.md",
         "Benchmarks" => "benchmarks.md",
         "Regression adjustment" => "regression_adjustment.md",
