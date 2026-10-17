@@ -17,6 +17,8 @@ include("kernels/AdaptiveKernel.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
+# HPC helpers after checkpointing: `collect_checkpoints!` matches its naming.
+include("hpc/launcher.jl")
 include("engines/MCMC.jl")
 include("engines/PMC.jl")
 # summary types first: summary_utils' validate_summary_keys dispatches on AbstractSummary
@@ -103,6 +105,12 @@ export ABCSimulator,
        list_checkpoints,
        load_checkpoint,
        load_latest_state,
+       SlurmTemplate,
+       render_slurm_script,
+       write_slurm_script,
+       make_generation_job,
+       collect_checkpoints!,
+       simulate_slurm_submission_preview,
        epsilon_quantile,
        QuantileSchedule,
        FixedSchedule,
