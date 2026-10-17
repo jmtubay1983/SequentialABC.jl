@@ -203,3 +203,65 @@ function run_smc!(state::ABCSMCState, summary_obs;
 
     return state
 end
+
+"""
+    run_smc(cfg::ABCSMCConfig, summary_obs; N, T, schedule = QuantileSchedule(0.5),
+            ε0 = Inf, M = 1, base_seed = 1, Tθ = nothing, max_attempts = 10_000,
+            checkpoint_dir = nothing) -> ABCSMCState
+
+One‑call ABC‑SMC: build the state, generate generation 1 from the prior and
+advance to generation `T`, returning the final [`ABCSMCState`](@ref). This is the
+counterpart of [`run_mcmc`](@ref), which has the same `(config, summary_obs;
+kwargs…)` shape — no manual [`make_state`](@ref) / [`initialize!`](@ref) /
+[`run_smc!`](@ref) bookkeeping.
+
+Keywords:
+  - `N::Int`      — population size
+  - `T::Int`      — total generations, *including* generation 1
+  - `schedule`    — callable `(state, t) -> ε_t`; only generations `t ≥ 2` consult
+    it. See [`QuantileSchedule`](@ref) and [`FixedSchedule`](@ref); any function of
+    `(state, t)` works
+  - `ε0`          — tolerance used to accept generation 1. The default `Inf`
+    accepts the first prior draw for every particle, so generation 1 *is* a plain
+    prior sample and the schedule sets the real tolerance from generation 2 on;
+    the state then keeps `ε = Inf` if `T == 1`. Pass a finite value to start from
+    a tighter, pre‑filtered set instead
+  - `M::Int`      — simulator replicates per particle (summaries are averaged)
+  - `base_seed`   — base seed; the same arguments replay an identical run
+  - `Tθ`          — parameter type returned by `cfg.sample_prior`. `nothing`
+    (default) infers it by drawing one prior sample with a throwaway RNG and
+    discarding the value; pass the type to skip that draw
+  - `max_attempts` — attempts allowed per particle before erroring
+  - `checkpoint_dir` — if given, an atomic checkpoint is written after generation 1
+    and after every completed generation. Resume with [`load_latest_state`](@ref)
+    plus [`run_smc!`](@ref) — calling `run_smc` again would restart from scratch
+
+# Example
+```julia
+state = run_smc(cfg, s_obs; N = 1000, T = 10)
+state = run_smc(cfg, s_obs; N = 1000, T = 4,
+                schedule = FixedSchedule([4.0, 2.0, 1.0, 0.5]))
+```
+"""
+function run_smc(cfg::ABCSMCConfig, summary_obs;
+                 N::Int, T::Int,
+                 schedule = QuantileSchedule(0.5),
+                 ε0::Real = Inf,
+                 M::Int = 1,
+                 base_seed::Int = 1,
+                 Tθ = nothing,
+                 max_attempts::Int = 10_000,
+                 checkpoint_dir::Union{Nothing,AbstractString} = nothing)
+    N >= 1 || throw(ArgumentError("N must be ≥ 1, got $N"))
+    T >= 1 || throw(ArgumentError("T must be ≥ 1, got $T"))
+    M >= 1 || throw(ArgumentError("M must be ≥ 1, got $M"))
+
+    # The state preallocates Vector{Tθ}; infer the prior's raw parameter type from
+    # a discarded draw (throwaway RNG, so the run's deterministic stream is
+    # untouched) unless the caller supplied it.
+    Tθ_eff = Tθ === nothing ? typeof(cfg.sample_prior(MersenneTwister(base_seed))) : Tθ
+
+    state = make_state(cfg, Tθ_eff, N, Float64(ε0), base_seed)
+    return run_smc!(state, summary_obs; T = T, schedule = schedule, M = M,
+                    max_attempts = max_attempts, checkpoint_dir = checkpoint_dir)
+end

@@ -65,7 +65,7 @@ Filter = x -> occursin("FixedSchedule", string(x)) || occursin("QuantileSchedule
 Modules = [SequentialABC]
 Order = [:function]
 Private = false
-Filter = x -> occursin("initialize!", string(x)) || occursin("run_generation!", string(x)) || occursin("run_smc!", string(x))
+Filter = x -> occursin("initialize!", string(x)) || occursin("run_generation!", string(x)) || occursin("run_smc", string(x))
 ```
 
 ## Deterministic RNG
