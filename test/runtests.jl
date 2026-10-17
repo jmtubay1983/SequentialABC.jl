@@ -11,6 +11,7 @@ using Test
     include("test_smc.jl")
     include("run_smc_tests.jl")
     include("mcmc_tests.jl")
+    include("pmc_tests.jl")
     include("regression_adjustment_tests.jl")
     include("plot_tests.jl")
     include("test_examples.jl")

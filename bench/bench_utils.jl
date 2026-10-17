@@ -213,6 +213,23 @@ function run_smc_adaptive(cfg, p::GaussianProblem; N::Int, T::Int, q::Real,
 end
 
 """
+    run_pmc_bench(cfg, p; N, T, ladder, seed, kernel_rule = :beaumont)
+        -> (state, seconds)
+
+ABC-PMC on a **prescribed** tolerance ladder: generation `t` runs at `ladder[t]`,
+so the row is scored at exactly the same sequence of ABC targets as the ABC-SMC
+rows. The perturbation covariance is re-derived as `2·Cov(θ_{t-1}, w_{t-1})` at
+every generation boundary, and the population is never resampled.
+"""
+function run_pmc_bench(cfg, p::GaussianProblem; N::Int, T::Int, ladder, seed::Int,
+                       kernel_rule = :beaumont)
+    t0 = time_ns()
+    st = run_pmc(cfg, p.s_obs; N = N, T = T, εs = ladder, kernel_rule = kernel_rule,
+                 base_seed = seed)
+    return (state = st, seconds = (time_ns() - t0) / 1e9)
+end
+
+"""
     run_mcmc_bench(cfg, p; ε, n_samples, seed) -> (chain, seconds)
 
 ABC-MCMC at tolerance `ε` with the proposal covariance of `cfg`.

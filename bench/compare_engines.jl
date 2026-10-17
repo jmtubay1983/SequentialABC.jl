@@ -13,12 +13,19 @@
 #                                  hand-tuned fixed kernel can do
 #   SMC  adaptive (batch)        — Σ re-estimated from the population, one call
 #   SMC  adaptive (streaming)    — … one particle at a time, committed per generation
+#   PMC  (2Σ_{t-1})              — population Monte Carlo: adaptive covariance, no
+#                                  resampling, weighted ancestor draws only
 #   MCMC fixed (Σ0), MCMC fixed (oracle), MCMC adaptive
 #
-# Every SMC row is run at the *same* prescribed tolerance ladder, and every MCMC
-# row at the same ε, so the rows are scored at identical ABC targets and differ
-# only in their kernel. Seeds are pinned: statistics are identical across
+# Every SMC/PMC row is run at the *same* prescribed tolerance ladder, and every
+# MCMC row at the same ε, so the rows are scored at identical ABC targets and
+# differ only in their kernel. Seeds are pinned: statistics are identical across
 # repetitions and only the wall clock varies (the minimum is reported).
+#
+# One caveat on the ESS column: an ABC-SMC row's ESS is measured after that row's
+# resampling, so it reads close to N by construction, while the PMC row never
+# resamples and therefore reports the *true* weighted ESS — which is the smaller,
+# honest number. The two are not directly comparable; the resamp column says why.
 
 include(joinpath(@__DIR__, "bench_utils.jl"))
 
@@ -112,6 +119,8 @@ function print_table(rows::Vector{BenchRow})
             "mc se = √(mean diag Σ̂ / ESS) = the noise floor of that RMSE,")
     println("        cov err = relative Frobenius error of the posterior covariance, " *
             "Σ₁₁ = the kernel this row actually used")
+    println("        ESS caveat: SMC rows are measured *after* resampling (reset to ~N), " *
+            "PMC reports the true weighted ESS — see resamp.")
     return nothing
 end
 
@@ -137,9 +146,25 @@ function smc_row(name, p::GaussianProblem, ref, Σ, bench, ladder; adaptive::Boo
 
     m = posterior_metrics(st, ref; sims = st.n_attempts, resamples = st.n_resamples,
                           seconds = secs)
+    used_Σ11 = kernel === nothing ? Σ[1, 1] : kernel.Σ[1, 1]   # adapted rows report their last Σ
     row = BenchRow(name, m.sims, m.seconds, m.ess, m.resamples, m.ε, NaN,
-                   m.rmse, m.mc_se, m.cov_err, Σ[1, 1], m.mean)
+                   m.rmse, m.mc_se, m.cov_err, used_Σ11, m.mean)
     return row, st, kernel
+end
+
+function pmc_row(name, p::GaussianProblem, ref, Σ, bench, ladder;
+                 kernel_rule = :beaumont)
+    cfg = problem_config(p, Σ)
+    out, secs = repeat_min(
+        () -> run_pmc_bench(cfg, p; N = bench.N, T = bench.T, ladder = ladder,
+                            seed = bench.seed, kernel_rule = kernel_rule),
+        bench.reps)
+    st = out.state
+    m = posterior_metrics(st, ref; sims = st.n_attempts, resamples = st.n_resamples,
+                          seconds = secs)
+    row = BenchRow(name, m.sims, m.seconds, m.ess, m.resamples, m.ε, NaN,
+                   m.rmse, m.mc_se, m.cov_err, st.cfg.Σ[1, 1], m.mean)
+    return row, st
 end
 
 function mcmc_row(name, p::GaussianProblem, ref, Σ, ε; n_samples::Int, seed::Int,
@@ -204,6 +229,12 @@ function main()
                                      adaptive = true, streaming = true)
     push!(rows, r)
 
+    # PMC: the same ladder and the same adaptive-covariance recipe as the SMC
+    # adaptive row, but the population is never resampled — weighted ancestor
+    # draws only, so the ESS column is the true weighted ESS.
+    r, st_pmc = pmc_row("PMC (2Σ_{t-1}, no resample)", p, ref, Σ0, bench, ladder)
+    push!(rows, r)
+
     # MCMC rows share the tolerance the SMC ladder ends at.
     ε_mcmc = ladder[end]
 
@@ -233,6 +264,19 @@ function main()
     println("streaming ≡ batch: ", parity_ok ? "yes" : "NO",
             "  (sims $(b.sims) vs $(s.sims), max |Δ posterior mean| = ",
             parity_dmean, ")")
+
+    # PMC and adaptive SMC differ *only* in the kernel rule (same here) and the
+    # resampling step. If that step never fired, the two engines take the same
+    # path through the same seeds and must agree exactly — a cross-check between
+    # two independent code paths (run_pmc's per-generation update! vs the manual
+    # loop behind the adaptive SMC row).
+    sm, pm = rows[3], rows[5]
+    pmc_dmean = maximum(abs.(sm.mean .- pm.mean))
+    pmc_same_path = sm.resamples == 0
+    println("PMC ≡ SMC adaptive (no resampling fired): ",
+            pmc_same_path ? (pmc_dmean < 1e-6 ? "yes" : "NO") : "n/a (SMC resampled)",
+            "  (sims $(sm.sims) vs $(pm.sims), max |Δ posterior mean| = ",
+            pmc_dmean, ")")
     println("kernel updates: batch $(k_batch.n_updates), streaming $(k_stream.n_updates); " *
             "streaming accumulator holds $(k_stream.est.n) particles")
 
@@ -246,12 +290,15 @@ function main()
                      rows[1].sims / rows[3].sims, rows[3].sims, rows[1].sims))
     println(@sprintf("  SMC  adaptive vs oracle    %5.2f× the oracle's cost     (%d vs %d)",
                      rows[3].sims / rows[2].sims, rows[3].sims, rows[2].sims))
+    println(@sprintf("  PMC  vs SMC adaptive       %5.2f× the simulations      (%d vs %d), resamp %d vs %d, true ESS %.1f vs %.1f",
+                     rows[5].sims / rows[3].sims, rows[5].sims, rows[3].sims,
+                     rows[5].resamples, rows[3].resamples, rows[5].ess, rows[3].ess))
     println(@sprintf("  MCMC adaptive vs Σ0        %5.2f× the ESS               (%.1f vs %.1f) at identical simulation cost (%d)",
-                     rows[7].ess / rows[5].ess, rows[7].ess, rows[5].ess, rows[5].sims))
+                     rows[8].ess / rows[6].ess, rows[8].ess, rows[6].ess, rows[6].sims))
     println(@sprintf("  MCMC oracle-Σ* vs Σ0       %5.2f× the ESS               (%.1f vs %.1f)",
-                     rows[6].ess / rows[5].ess, rows[6].ess, rows[5].ess))
+                     rows[7].ess / rows[6].ess, rows[7].ess, rows[6].ess))
     println("  (ABC-MCMC simulates exactly once per Metropolis step, so all MCMC rows " *
-            "spend $(rows[5].sims) simulations; the kernel shows up in mixing, not in the count.)")
+            "spend $(rows[6].sims) simulations; the kernel shows up in mixing, not in the count.)")
 
     # Soundness check: every engine's posterior mean must agree with the exact
     # posterior to within its own Monte-Carlo error. This is the statistically
@@ -275,9 +322,18 @@ function main()
         println(md, "```\n")
         println(md, markdown_table(COLUMNS, [row_cells(r) for r in rows]))
         println(md, "\n`sims` = simulator calls; `wall (s)` = minimum over $(bench.reps) " *
-                    "repetition(s); `ESS` = final population (SMC) or Geyer " *
-                    "minimum-over-dimensions (MCMC). All SMC rows ran the ladder above; " *
-                    "MCMC rows share ε = $(round(ε_mcmc; digits = 4)).")
+                    "repetition(s); `ESS` = final population (SMC/PMC) or Geyer " *
+                    "minimum-over-dimensions (MCMC). All SMC and PMC rows ran the ladder " *
+                    "above; MCMC rows share ε = $(round(ε_mcmc; digits = 4)).")
+        println(md, "\nPMC never resamples, so its ESS is the true weighted ESS — SMC rows " *
+                    "are measured after resampling (see the resamp column).")
+        if pmc_same_path
+            println(md, "\nPMC and adaptive SMC agreed exactly (max |Δ posterior mean| = " *
+                        "$(pmc_dmean)): this problem never triggered the SMC resampling " *
+                        "step, so both engines follow the same path. They diverge only " *
+                        "when the ESS-triggered resample fires — see the " *
+                        "degenerate-prior case in `test/pmc_tests.jl`.")
+        end
         println(md, "\nStreaming and batch adaptation agreed: **$(parity_ok ? "yes" : "NO")** " *
                     "(max |Δ posterior mean| = $(parity_dmean)).")
         write(joinpath(cli.out, "compare_engines.md"), String(take!(md)))
@@ -297,12 +353,17 @@ function main()
     # consistency of every row's mean with the exact posterior.
     @assert all(r -> isfinite(r.rmse) && isfinite(r.cov_err), rows)
     @assert parity_ok "streaming and batch adaptation diverged"
+    if pmc_same_path
+        @assert pmc_dmean < 1e-6 && pm.sims == sm.sims "PMC diverged from SMC adaptive although no resampling fired"
+    end
     @assert k_stream.n_updates == bench.T - 1 "streaming committed the wrong number of times"
     @assert k_stream.est.n == 0 "streaming accumulator was not reset by commit!"
-    @assert all(r -> r.ε == ladder[end], rows[1:4]) "SMC rows did not run the prescribed ladder"
+    @assert all(r -> r.ε == ladder[end], rows[1:5]) "SMC/PMC rows did not run the prescribed ladder"
+    @assert rows[5].resamples == 0 "PMC resampled — it must never do so"
+    @assert st_pmc.ess == ess(st_pmc.w) "PMC reported an ESS other than the weighted population's"
     @assert rows[3].sims < rows[1].sims "adaptive SMC needed no fewer simulations than Σ0"
     @assert rows[4].sims < rows[1].sims "streaming SMC needed no fewer simulations than Σ0"
-    @assert rows[7].acceptance > rows[5].acceptance "adaptive MCMC proposal did not beat Σ0"
+    @assert rows[8].acceptance > rows[6].acceptance "adaptive MCMC proposal did not beat Σ0"
     @assert maximum(scale) <= 5.0 "a row's posterior mean is inconsistent with the exact posterior"
     println("✓ benchmark completed successfully")
     return nothing
