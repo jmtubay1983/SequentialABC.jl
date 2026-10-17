@@ -24,6 +24,8 @@ include("summaries/Summaries.jl")
 include("summaries/summary_utils.jl")
 # distances after summaries: named summaries are compared via namedtuple_to_vector
 include("distances/Distances.jl")
+# recipes last: they compose schedules, kernels, summaries and distances
+include("recipes/Recipes.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
@@ -138,6 +140,9 @@ export ABCSimulator,
        l2_distance,
        weighted_l2,
        mahalanobis_distance,
-       make_mahalanobis
+       make_mahalanobis,
+       default_schedule,
+       default_kernel_scaling,
+       preset_summaries
 
 end
