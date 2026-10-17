@@ -22,6 +22,8 @@ include("engines/PMC.jl")
 # summary types first: summary_utils' validate_summary_keys dispatches on AbstractSummary
 include("summaries/Summaries.jl")
 include("summaries/summary_utils.jl")
+# distances after summaries: named summaries are compared via namedtuple_to_vector
+include("distances/Distances.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
@@ -132,6 +134,10 @@ export ABCSimulator,
        flatten_namedtuple,
        namedtuple_to_vector,
        vector_to_namedtuple,
-       validate_summary_keys
+       validate_summary_keys,
+       l2_distance,
+       weighted_l2,
+       mahalanobis_distance,
+       make_mahalanobis
 
 end
