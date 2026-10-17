@@ -21,4 +21,5 @@ using Test
     include("kernel_tuning_tests.jl")
     include("plot_tests.jl")
     include("test_examples.jl")
+    include("aqua_tests.jl")
 end
