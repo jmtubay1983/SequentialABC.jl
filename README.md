@@ -142,15 +142,14 @@ actually prior-driven.
 
 ## Testing
 
+Run the full test suite with the project environment:
+
 ```bash
-julia --project=. test_load.jl
+julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-13 checks: kernel log-density vs `logpdf(MvNormal)` (1e-12), toy-model
-inference vs analytic posterior, determinism (bit-identical reruns),
-restartability (interrupted == uninterrupted), gen-1 uniform weights,
-systematic-resampling unit tests, forced ESS-collapse resampling, checkpoint
-round-trips and file hygiene, adaptive-ε monotonicity and restart equivalence.
+The repository test suite currently contains 1058 tests across all modules.
+Use the individual test files in `test/` for focused debugging.
 
 Note: docs/Manifest.toml is ignored.
 
@@ -160,7 +159,10 @@ The deterministic seed scheme plus generation-indexed checkpoints give you a
 trivially safe pattern: one job per generation-block, re-running the same
 `run_smc!(…; checkpoint_dir=…)` call — a preempted or duplicated job either
 no-ops (checkpoint already exists at that generation) or reproduces the
-identical result. A dedicated CLI wrapper is planned (Step 5).
+identical result. A dedicated CLI wrapper and Slurm job helpers are available as
+part of the HPC helpers introduced in v0.3.0. See the
+[HPC helpers documentation](https://jmtubay1983.github.io/SequentialABC.jl/dev/hpc/)
+and the `examples/` directory for usage examples and script previews.
 
 ## References
 
