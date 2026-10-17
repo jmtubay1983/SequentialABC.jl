@@ -68,6 +68,39 @@ Private = false
 Filter = x -> occursin("initialize!", string(x)) || occursin("run_generation!", string(x)) || occursin("run_smc", string(x)) || occursin("run_pmc", string(x))
 ```
 
+## Unified inference entrypoint
+
+When the engine is chosen at run time — a config file, a job-array variable, a
+`--engine` flag — [`run_inference`](@ref) is a named forwarder to the three
+entrypoints above:
+
+```julia
+engine = Symbol(get(ENV, "ABC_ENGINE", "smc"))     # :smc | :mcmc | :pmc
+
+result = run_inference(engine, cfg, s_obs; N = 1000, T = 5, base_seed = 2026)
+```
+
+| symbol | entrypoint | result type | keywords it accepts |
+|---|---|---|---|
+| `:smc`  | `run_smc`  | `ABCSMCState`  | `N`, `T`, `schedule`, `ε0`, `M`, `base_seed`, `checkpoint_dir` |
+| `:mcmc` | `run_mcmc` | `ABCMCMCChain` | `n_samples`, `ε`, `thin`, `M`, `base_seed` |
+| `:pmc`  | `run_pmc`  | `ABCSMCState`  | `N`, `T`, `εs`, `schedule`, `kernel_rule`, `M`, `base_seed` |
+
+Keywords are **not** inspected by the dispatcher — it forwards them and each
+engine validates its own, so the failure you get for a wrong keyword is the one
+the engine itself raises. Note in particular that ABC-MCMC takes `n_samples`
+rather than `N`: `run_inference(:mcmc, cfg, s_obs; N = 1000)` fails the same way
+`run_mcmc(cfg, s_obs; N = 1000)` does.
+
+Every call starts a fresh run; returning an `ABCSMCState` means the usual
+downstream tools work on the result, and resuming a checkpointed population goes
+through `run_smc!` / `run_pmc!` on a state from `load_latest_state`, not through
+this dispatcher.
+
+```@docs
+run_inference
+```
+
 ## Deterministic RNG
 
 ```@autodocs
