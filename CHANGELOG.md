@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.3.0 — 2026-10-17
+
+The Phase B helpers: offline Slurm job generation and checkpoint collection, plus
+kernel bandwidth and scaling utilities.
+
+- Add Slurm job templates and launcher helpers (`SlurmTemplate`, `render_slurm_script`, `write_slurm_script`, `make_generation_job`, `collect_checkpoints!`, `simulate_slurm_submission_preview`).
+- Add kernel bandwidth and scaling helpers (`auto_kernel_scale`, `shrinkage_covariance`, `bandwidth_from_cov`, `make_adaptive_kernel`).
+
 ## v0.2.0 — 2026-10-17
 
 The Phase A engine suite: three ABC engines behind one entry point, adaptive
