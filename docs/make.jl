@@ -16,6 +16,7 @@ makedocs(
         "Adaptive kernels" => "adaptive_kernels.md",
         "Summary statistics" => "summaries.md",
         "Distances" => "distances.md",
+        "Recipes" => "recipes.md",
         "Benchmarks" => "benchmarks.md",
         "Regression adjustment" => "regression_adjustment.md",
         "Plotting" => "plots.md",
