@@ -69,7 +69,7 @@ Symbol counts in `src/` (`grep -RIc --include='*.jl'`):
 
 ## Consequences for the gates
 
-- Rows 6, 7, 8, 9, 10, 13 and 14 cannot be exercised against production code. The gates
+- Rows 6, 7, 8, 9, 10 and 13 cannot be exercised against production code. The gates
   record `CAPABILITY_NOT_IMPLEMENTED: <name>` for each instead of asserting a
   test-local stand-in, so the report cannot claim coverage that the engine does not
   provide. Threaded execution (row 11) is exercised empirically by gate 3 even though no
