@@ -22,6 +22,48 @@ include("engines/PMC.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
+"""
+    run_inference(engine::Symbol, cfg, s_obs; kwargs...)
+
+Unified front door for the three inference engines. Keywords are forwarded
+**unchanged** to the engine's own entrypoint, and the engine's own result type
+comes back unwrapped — a named forwarder, not a new API level:
+
+| `engine` | calls | result | keywords |
+|---|---|---|---|
+| `:smc`  | [`run_smc`](@ref)  | [`ABCSMCState`](@ref) | `N`, `T`, `schedule`, `ε0`, `M`, `base_seed`, `checkpoint_dir` |
+| `:mcmc` | [`run_mcmc`](@ref) | [`ABCMCMCChain`](@ref) | `n_samples`, `ε`, `thin`, `M`, `base_seed` |
+| `:pmc`  | [`run_pmc`](@ref)  | [`ABCSMCState`](@ref) | `N`, `T`, `εs`, `schedule`, `kernel_rule`, `M`, `base_seed` |
+
+```julia
+state = run_inference(:smc,  cfg, s_obs; N = 1000, T = 5, base_seed = 2026)
+chain = run_inference(:mcmc, cfg, s_obs; n_samples = 2000, ε = 0.3, base_seed = 2026)
+pmc   = run_inference(:pmc,  cfg, s_obs; N = 1000, T = 5,
+                      εs = [4.0, 2.0, 1.0, 0.6, 0.4], base_seed = 2026)
+```
+
+Keywords are **not** inspected here: each engine validates its own, so
+`run_inference(:mcmc, cfg, s_obs; N = 1000)` fails with the same error
+`run_mcmc` would raise — ABC-MCMC takes `n_samples`, not `N`. An unsupported
+symbol throws an `ArgumentError`.
+
+Every call starts a **fresh** run. Resuming a checkpointed population is the
+state-based drivers' job: take an [`ABCSMCState`](@ref) from
+[`load_latest_state`](@ref) and continue with `run_smc!` / `run_pmc!`, which
+work directly on the result this function returns.
+"""
+function run_inference(engine::Symbol, cfg, s_obs; kwargs...)
+    if engine === :smc
+        return run_smc(cfg, s_obs; kwargs...)
+    elseif engine === :mcmc
+        return run_mcmc(cfg, s_obs; kwargs...)
+    elseif engine === :pmc
+        return run_pmc(cfg, s_obs; kwargs...)
+    else
+        throw(ArgumentError("Unknown engine: $(engine). Supported: :smc, :mcmc, :pmc"))
+    end
+end
+
 export ABCSimulator,
        AgentsSimulator,
        ContinuousSimulator,
@@ -46,6 +88,7 @@ export ABCSimulator,
        run_smc!,
        run_pmc,
        run_pmc!,
+       run_inference,
        importance_weight,
        ess,
        systematic_resample,
