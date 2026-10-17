@@ -19,6 +19,9 @@ include("smc.jl")
 include("checkpoint.jl")
 include("engines/MCMC.jl")
 include("engines/PMC.jl")
+# summary types first: summary_utils' validate_summary_keys dispatches on AbstractSummary
+include("summaries/Summaries.jl")
+include("summaries/summary_utils.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
@@ -114,6 +117,21 @@ export ABCSimulator,
        plot_trace,
        plot_diagnostics,
        plot_ppc,
-       PlotSpec
+       PlotSpec,
+       AbstractSummary,
+       FunctionSummary,
+       CompositeSummary,
+       ScaledSummary,
+       PCAProjection,
+       summary_keys,
+       compute_summary,
+       compose,
+       scale,
+       pca_reduce,
+       aggregate,
+       flatten_namedtuple,
+       namedtuple_to_vector,
+       vector_to_namedtuple,
+       validate_summary_keys
 
 end
