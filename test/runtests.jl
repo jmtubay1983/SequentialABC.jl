@@ -14,6 +14,7 @@ using Test
     include("pmc_tests.jl")
     include("run_inference_tests.jl")
     include("summaries_tests.jl")
+    include("distances_tests.jl")
     include("regression_adjustment_tests.jl")
     include("plot_tests.jl")
     include("test_examples.jl")
