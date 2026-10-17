@@ -29,3 +29,30 @@ jobs:
 
       - name: Instantiate, build, and test
         run: julia -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test()'
+
+  validation-gates:
+    name: Validation gates
+    runs-on: ubuntu-latest
+    env:
+      JULIA_PROJECT: '@.'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.13'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia
+            ~/.cache
+          key: ${{ runner.os }}-julia-${{ hashFiles('**/Project.toml', '**/Manifest.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-
+
+      - name: Instantiate and run validation gates
+        run: |
+          julia -e 'using Pkg; Pkg.instantiate()'
+          julia --project=. test/gates/run_gates.jl
