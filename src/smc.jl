@@ -71,7 +71,8 @@ end
 
 """
     run_generation!(state::ABCSMCState, summary_obs;
-                    ε::Float64, M::Int=1, max_attempts::Int=10_000)
+                    ε::Float64, M::Int=1, max_attempts::Int=10_000,
+                    resample::Bool=true)
 
 Run a single generation of ABC‑SMC with redraw‑until‑accepted.
 
@@ -83,9 +84,17 @@ For each particle i:
   5. If d ≤ ε accept, else redraw with new attempt counter
 
 Ensures no zero‑weight particles ⇒ normalization and ESS always well‑defined.
+
+`resample = false` skips the population resampling step that normally fires when
+`ESS < 0.5 N`. Ancestor draws of the next generation already sample the weighted
+population, which is exactly what population Monte Carlo relies on: the weights
+stay informative instead of being reset to `1/N`. The current tolerance still
+accepts particles, `state.ess` reports the true ESS and `state.n_resamples`
+stays at its previous value. Used by [`run_pmc`](@ref).
 """
 function run_generation!(state::ABCSMCState, summary_obs;
-                         ε::Float64, M::Int=1, max_attempts::Int=10_000)
+                         ε::Float64, M::Int=1, max_attempts::Int=10_000,
+                         resample::Bool=true)
     cfg = state.cfg
     θ_prev, w_prev = state.θ, state.w
     N = length(θ_prev)
@@ -143,8 +152,9 @@ function run_generation!(state::ABCSMCState, summary_obs;
     ess_val = ess(w_new)
 
     # Resample population if ESS < 0.5 * N (deterministic RNG; m = −2 tags the
-    # population-level resampling draw, distinct from all other seed roles)
-    if ess_val < 0.5N
+    # population-level resampling draw, distinct from all other seed roles).
+    # Disabled by `resample = false`, i.e. by population Monte Carlo.
+    if resample && ess_val < 0.5N
         rng_resample = MersenneTwister(make_particle_seed(state.gen + 1, 0, 0, -2, state.base_seed))
         idx = systematic_resample(w_new, rng_resample)
         θ_new = θ_new[idx]

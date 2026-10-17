@@ -18,6 +18,7 @@ include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
 include("engines/MCMC.jl")
+include("engines/PMC.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 
@@ -43,6 +44,8 @@ export ABCSimulator,
        run_generation!,
        run_smc,
        run_smc!,
+       run_pmc,
+       run_pmc!,
        importance_weight,
        ess,
        systematic_resample,
