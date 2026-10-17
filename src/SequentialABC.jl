@@ -14,6 +14,9 @@ include("schedules.jl")
 include("rng.jl")
 include("kernels.jl")
 include("kernels/AdaptiveKernel.jl")
+# kernel tuning after the adaptive kernel: it reuses `scaling_factor`, `cov`
+# and `_kernel_matrix` from the kernels above.
+include("kernel_tuning/KernelTuning.jl")
 include("weights.jl")
 include("smc.jl")
 include("checkpoint.jl")
@@ -111,6 +114,10 @@ export ABCSimulator,
        make_generation_job,
        collect_checkpoints!,
        simulate_slurm_submission_preview,
+       auto_kernel_scale,
+       shrinkage_covariance,
+       bandwidth_from_cov,
+       make_adaptive_kernel,
        epsilon_quantile,
        QuantileSchedule,
        FixedSchedule,
