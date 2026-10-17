@@ -29,6 +29,10 @@ make_particle_seed(gen, i, attempt, m, base_seed)
 
 Without the `attempt` counter, redraw-until-accepted would replay the identical rejected proposal forever with a deterministic RNG. Incrementing `attempt` on each rejection ensures a fresh draw every time.
 
+### Version-stable seed derivation
+
+`make_particle_seed` uses a SplitMix64-style integer mixing function instead of Julia's `hash()`, which is not guaranteed stable across Julia versions. A `SEED_SCHEMA_VERSION` constant is mixed into every seed, and checkpoints store `seed_schema_version`. `load_checkpoint` rejects any checkpoint written under a different schema version, preventing silent replay divergence after a Julia upgrade or code change.
+
 ## 2. Transform vs prior space
 
 Particles \(\theta_{\text{raw}}\) live in the space where the prior is defined. The transform \(\theta_{\text{raw}} \to \theta_{\text{model}}\) is applied **only at simulation time**.
@@ -78,7 +82,7 @@ This is numerically identical to `Distributions.logpdf(MvNormal(μ, Σ), x)` (un
 Checkpoints serialize **data only** — never `cfg` and its closures:
 
 ```julia
-data = (θ, w, summaries, dists, ε, gen, ess, base_seed, n_attempts, n_resamples)
+data = (θ, w, summaries, dists, ε, gen, ess, base_seed, n_attempts, n_resamples, seed_schema_version)
 ```
 
 This means:
@@ -86,5 +90,6 @@ This means:
 - A checkpoint saved with Julia 1.10 can be loaded with Julia 1.11.
 - A checkpoint saved with one version of your model code can be loaded with an updated version — you just reattach the new `cfg`.
 - Checkpoints are safe to copy across filesystems and Slurm nodes.
+- Each checkpoint stores `seed_schema_version`. Loading a checkpoint written under a different `SEED_SCHEMA_VERSION` throws a clear error, because the seed stream (and thus every RNG draw) would differ.
 
 Atomicity is guaranteed by writing to `.tmp` then renaming (POSIX `rename` is atomic on the same filesystem). A job killed mid-write leaves at worst a stale `.tmp` file, which the loader ignores.
