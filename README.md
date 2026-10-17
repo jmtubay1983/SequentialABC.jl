@@ -1,5 +1,7 @@
 # SequentialABC.jl
 
+[![CI](https://github.com/jmtubay1983/SequentialABC.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/jmtubay1983/SequentialABC.jl/actions/workflows/CI.yml)
+[![Docs](https://github.com/jmtubay1983/SequentialABC.jl/actions/workflows/docs.yml/badge.svg)](https://jmtubay1983.github.io/SequentialABC.jl/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23415967.svg)](https://doi.org/10.5281/zenodo.23415967)
 
 A small, project-owned **ABC-SMC** (Approximate Bayesian Computation with
@@ -95,6 +97,7 @@ AgentsSimulator(model_builder, step!, summary, steps)
 
 The Agents.jl backend keeps the whole particle simulation on one deterministic
 rng stream: construction (`add_agent!`, initial placement) and every step
+consume it in order.
 
 ## Determinism / seed scheme
 
@@ -167,11 +170,54 @@ systems.* J. R. Soc. Interface 6, 187–202.
 
 ## Roadmap
 
-- [x] Phase 1 — core Toni ABC-SMC, deterministic seeds, redraw-until-accepted
-- [x] Phase 2 Steps 1–4 — systematic resampling, checkpointing, adaptive ε, example models
-- [ ] Step 5 — Slurm CLI
-- [ ] Step 6 — formal `test/` suite (`Pkg.test`)
-- [ ] Step 7 — documentation site / API docs
+### Completed
 
-consume it in order. Agents.jl itself is **not** a dependency of
-SequentialABC — see `examples/agents_env/` for a self-contained environment.
+- **Phase A (core)** — core ABC-SMC entrypoint, deterministic seeds,
+  redraw-until-accepted, summaries, distances, recipes.
+  **Released:** `v0.2.0` (2026-10-17). See the
+  [v0.2.0 release](https://github.com/jmtubay1983/SequentialABC.jl/releases/tag/v0.2.0).
+
+- **Phase B (inference tooling & HPC helpers)** — Slurm job templates and
+  launcher helpers; kernel bandwidth and scaling utilities; expanded tests
+  and docs.
+  **Released:** `v0.3.0` (2026-10-17). See the
+  [v0.3.0 release](https://github.com/jmtubay1983/SequentialABC.jl/releases/tag/v0.3.0).
+
+### Recommended quickstart (run in order)
+
+1. Read **Quickstart** (above).
+2. Run `julia --project=. examples/run_inference_example.jl` — one toy model
+   through all three engines, with pinned seeds.
+3. Generate per-generation Slurm scripts with `make_generation_job(cfg, gen)`
+   and preview the `sbatch` commands with `simulate_slurm_submission_preview`
+   (string preview only — nothing is submitted).
+4. Run inference locally with `run_inference(:smc, cfg, s_obs; ...)` using
+   `make_adaptive_kernel` and one of the recipes (`default_schedule`,
+   `preset_summaries`).
+5. Collect checkpoints with `collect_checkpoints!` and resume with
+   `load_latest_state`.
+
+### Next (candidate Phase C items)
+
+- **Job-array orchestration**: helper to generate job arrays and a small
+  resume script (no cluster submission).
+- **Monitoring dashboard**: lightweight Pluto notebook to monitor progress
+  and ESS.
+- **Advanced distances**: optional Wasserstein/energy distances for
+  spatial/time-series models.
+- **Paper & citation**: prepare a JOSS submission and keep `CITATION.cff`
+  (currently `0.1.0`) in step with each release.
+
+### Notes
+
+- `examples/agents_env/` contains a self-contained environment demonstrating
+  how to integrate Agents.jl; Agents.jl is **not required** to run the core
+  examples.
+- For reproducible results, use the pinned seeds in the examples and the
+  `--project` flag when running Julia.
+
+### How to cite
+
+Placeholder — machine-readable citation metadata lives in
+[`CITATION.cff`](CITATION.cff); please cite this package via the Zenodo DOI
+badge above (`10.5281/zenodo.23415967`).
