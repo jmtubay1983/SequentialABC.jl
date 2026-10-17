@@ -7,16 +7,27 @@ on:
 
 jobs:
   test:
-    name: Julia 1.13 (ubuntu-latest)
-    runs-on: ubuntu-latest
+    name: Julia ${{ matrix.julia }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     env:
       JULIA_PROJECT: '@.'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        julia: ['1.10', '1']
+        exclude:
+          # Latest stable only needed on ubuntu; 1.10 covers all platforms
+          - os: windows-latest
+            julia: '1'
+          - os: macos-latest
+            julia: '1'
     steps:
       - uses: actions/checkout@v4
 
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1.13'
+          version: ${{ matrix.julia }}
 
       - uses: actions/cache@v4
         with:
@@ -55,4 +66,11 @@ jobs:
       - name: Instantiate and run validation gates
         run: |
           julia -e 'using Pkg; Pkg.instantiate()'
-          julia --project=. test/gates/run_gates.jl
+          julia --project=. test/gates/run_gates.jl | tee /tmp/gates_output.txt
+      - name: Write verdict to job summary
+        run: |
+          echo "## Validation Gates Verdict" >> $GITHUB_STEP_SUMMARY
+          grep -E 'VALIDATION VERDICT|Missing production capabilities|Not run' /tmp/gates_output.txt >> $GITHUB_STEP_SUMMARY || true
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Gate-by-gate:" >> $GITHUB_STEP_SUMMARY
+          grep -E 'Gate [1-4]' /tmp/gates_output.txt >> $GITHUB_STEP_SUMMARY || true
