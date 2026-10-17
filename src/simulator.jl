@@ -1,3 +1,12 @@
+"""
+    ABCSimulator
+
+Abstract type for simulator backends. Subtypes must implement `run_sim_once`.
+
+Concrete subtypes:
+- [`AgentsSimulator`](@ref) — Agents.jl backend
+- [`ContinuousSimulator`](@ref) — ODE/PDE/SSA backend
+"""
 abstract type ABCSimulator end
 
 """

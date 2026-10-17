@@ -2,7 +2,7 @@
 
 julia_version = "1.13.2"
 manifest_format = "2.1"
-project_hash = "2531517f03f612896e9e6836885476531b18ffca"
+project_hash = "51eb0ee8ea7ffa17e4da55b725c1fb53814fadfd"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -355,7 +355,7 @@ version = "1.0.0"
 deps = ["Distributions", "LinearAlgebra", "LogExpFunctions", "Random", "Requires", "Serialization", "Statistics", "StatsBase"]
 path = "."
 uuid = "9ec30f26-5bd5-453c-9fb9-4a291198e4b8"
-version = "0.1.0"
+version = "0.3.0"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
