@@ -18,6 +18,7 @@ using Test
     include("recipes_tests.jl")
     include("regression_adjustment_tests.jl")
     include("hpc_tests.jl")
+    include("kernel_tuning_tests.jl")
     include("plot_tests.jl")
     include("test_examples.jl")
 end
