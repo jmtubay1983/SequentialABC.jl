@@ -1,6 +1,6 @@
 name = "SequentialABC"
 uuid = "9ec30f26-5bd5-453c-9fb9-4a291198e4b8"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["tubay001 <jerrold.tubay@wur.nl>"]
 
 [deps]
