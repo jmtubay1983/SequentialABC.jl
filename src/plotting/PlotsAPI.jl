@@ -272,12 +272,34 @@ function _render_impl(kind::Symbol, data::NamedTuple, opts::NamedTuple, Plots, S
                         linewidth = 2, framestyle = :box,
                         xlabel = "generation", ylabel = "attempts",
                         title = "Simulation attempts")
-        return Plots.plot(p1, p2, p3; layout = (1, 3), size = (960, 340),
-                          plot_title = "ABC‑SMC diagnostics",
-                          plot_titlefontsize = 14, plot_titlevspan = 0.14,
-                          top_margin = 6Plots.mm,
-                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
-                          bottom_margin = 6Plots.mm)
+
+        # Dedicated title subplot: reserves an entire row so the overall title
+        # can never collide with subplot titles. The title subplot has no
+        # frame, grid, or ticks — just centred text.
+        ptitle = Plots.plot(title = "ABC‑SMC diagnostics",
+            titlefontsize = 14,
+            titlelocation = :center,
+            legend = false,
+            framestyle = :none,
+            grid = false,
+            xticks = nothing,
+            yticks = nothing,
+            xlim = (0, 1),
+            ylim = (0, 1),
+            margin = 0Plots.mm)
+
+        # Empty spacers so the title sits in the centre cell of the top row,
+        # with the three diagnostics beneath it in the bottom row.
+        spacer = Plots.plot(framestyle = :none, grid = false,
+            xticks = nothing, yticks = nothing,
+            xlim = (0, 1), ylim = (0, 1),
+            margin = 0Plots.mm)
+
+        return Plots.plot(spacer, ptitle, spacer, p1, p2, p3;
+            layout = (2, 3),
+            size = (960, 440),
+            left_margin = 5Plots.mm, right_margin = 3Plots.mm,
+            bottom_margin = 6Plots.mm)
 
     elseif kind === :ppc
         nb = get(opts, :nbins, 20)
