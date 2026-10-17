@@ -14,6 +14,7 @@ makedocs(
         "ABC-MCMC" => "mcmc.md",
         "Population Monte Carlo" => "pmc.md",
         "Adaptive kernels" => "adaptive_kernels.md",
+        "Summary statistics" => "summaries.md",
         "Benchmarks" => "benchmarks.md",
         "Regression adjustment" => "regression_adjustment.md",
         "Plotting" => "plots.md",

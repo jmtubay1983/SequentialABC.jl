@@ -13,6 +13,7 @@ using Test
     include("mcmc_tests.jl")
     include("pmc_tests.jl")
     include("run_inference_tests.jl")
+    include("summaries_tests.jl")
     include("regression_adjustment_tests.jl")
     include("plot_tests.jl")
     include("test_examples.jl")
