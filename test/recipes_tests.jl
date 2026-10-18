@@ -6,6 +6,7 @@
 # pin the composition, the validation, and one end-to-end run per engine.
 
 using Test
+using SequentialABC
 using Random
 using Statistics
 using LinearAlgebra
