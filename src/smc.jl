@@ -39,8 +39,9 @@ function initialize!(state::ABCSMCState, summary_obs;
             sims = run_sim_once(cfg, 1, i, attempts, θ_raw; M=1, base_seed=state.base_seed)
             s̄ = sims[1]
 
-            # Compute distance
-            d = cfg.distance(s̄, summary_obs)
+            # Compute distance — uses frozen adaptive weights if active,
+            # otherwise the base distance unchanged.
+            d = adaptive_distance(state, cfg.distance, s̄, summary_obs)
 
             if d <= ε
                 # Accept: store on the raw space (prior's space)
@@ -184,11 +185,25 @@ end
 """
     run_smc!(state::ABCSMCState, summary_obs;
              T::Int, schedule, M::Int=1, max_attempts::Int=10_000,
+             adaptive::Union{Nothing,AdaptiveDistanceConfig}=nothing,
              checkpoint_dir::Union{Nothing,AbstractString}=nothing)
 
 Run ABC‑SMC for T generations with adaptive tolerance schedule.
 
-schedule should be a function: schedule(state, t) -> ε_t
+`schedule` should be a callable `(state, t, distances) -> ε_t`. The 2‑arg form
+`(state, t)` is preserved for backward compatibility and uses `state.dists`.
+Built-in schedules:
+
+- `FixedSchedule` — ignores `distances`, returns `εs[t]`.
+- `QuantileSchedule` — uses `distances` (non‑adaptive: `state.dists`;
+  adaptive: `state.adaptive.epsilon_distances`).
+
+If `adaptive` is provided, at each generation boundary (after generation t ≥ 1)
+the inverse‑distance weights are re‑estimated from the accepted summaries and
+the current generation's distances are recomputed under the new weights. The
+schedule then receives those recomputed distances. `state.dists` always holds
+the acceptance distances computed with the weights governing the completed
+generation — it is never overwritten by recomputed distances.
 
 If `checkpoint_dir` is given, an atomic checkpoint is written after
 initialization and after every completed generation (`state_gen_XXX.jls`).
@@ -197,22 +212,63 @@ Restart by loading with `load_latest_state(checkpoint_dir, cfg)` and calling
 """
 function run_smc!(state::ABCSMCState, summary_obs;
                   T::Int, schedule, M::Int=1, max_attempts::Int=10_000,
+                  adaptive::Union{Nothing,AdaptiveDistanceConfig}=nothing,
                   checkpoint_dir::Union{Nothing,AbstractString}=nothing)
+
+    # Attach adaptive config to state if provided and not already present.
+    if adaptive !== nothing && state.adaptive === nothing
+        state.adaptive = AdaptiveDistanceState(
+            adaptive.strategy,
+            adaptive.key_order,   # will be set below from first summaries
+            copy(adaptive.policy),
+            nothing,   # weights — estimated after gen 1
+            state.gen, # gen_estimated
+            nothing,   # epsilon_distances
+            adaptive.epsilon0, # epsilon
+        )
+    end
 
     # Run generation‑1 if not already present
     if state.gen == 0
         initialize!(state, summary_obs; max_attempts=max_attempts)
+        # Initialize adaptive key order from the first summaries.
+        if state.adaptive !== nothing
+            st = state.adaptive
+            st.key_order = collect(keys(state.summaries[1]))
+            # Resize weights placeholder to match summary dimension.
+            st.weights = nothing
+        end
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     for t in (state.gen + 1):T
-        ε_new = schedule(state, t)
-        run_generation!(state, summary_obs; ε=ε_new, M=M, max_attempts=max_attempts)
+        # ── Generation boundary: adapt from completed generation t‑1 ──
+        if state.gen >= 1 && state.adaptive !== nothing
+            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
+        end
+
+        # ── Select distances for the schedule ──
+        distances = (state.adaptive !== nothing &&
+                     state.adaptive.epsilon_distances !== nothing) ?
+                    state.adaptive.epsilon_distances : state.dists
+
+        # ── Call schedule (3‑arg if supported, else 2‑arg for back‑compat) ──
+        ε_new = if Base.applicable(schedule, state, t, distances)
+                    schedule(state, t, distances)
+                else
+                    schedule(state, t)
+                end
+
+        run_generation!(state, summary_obs; ε=ε_new, M=M,
+                        max_attempts=max_attempts)
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     return state
 end
+
+# Helper: extract the base distance function from the state's config.
+cfg_distance(state::ABCSMCState) = state.cfg.distance
 
 """
     run_smc(cfg::ABCSMCConfig, summary_obs; N, T, schedule = QuantileSchedule(0.5),
@@ -261,6 +317,7 @@ function run_smc(cfg::ABCSMCConfig, summary_obs;
                  base_seed::Int = 1,
                  Tθ = nothing,
                  max_attempts::Int = 10_000,
+                 adaptive::Union{Nothing,AdaptiveDistanceConfig}=nothing,
                  checkpoint_dir::Union{Nothing,AbstractString} = nothing)
     N >= 1 || throw(ArgumentError("N must be ≥ 1, got $N"))
     T >= 1 || throw(ArgumentError("T must be ≥ 1, got $T"))
@@ -273,5 +330,6 @@ function run_smc(cfg::ABCSMCConfig, summary_obs;
 
     state = make_state(cfg, Tθ_eff, N, Float64(ε0), base_seed)
     return run_smc!(state, summary_obs; T = T, schedule = schedule, M = M,
-                    max_attempts = max_attempts, checkpoint_dir = checkpoint_dir)
+                    max_attempts = max_attempts, adaptive = adaptive,
+                    checkpoint_dir = checkpoint_dir)
 end
