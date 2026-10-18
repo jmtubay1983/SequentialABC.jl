@@ -125,10 +125,11 @@ function run_generation!(state::ABCSMCState, summary_obs;
             sims = run_sim_once(cfg, state.gen + 1, i, attempts, θ_prop; M=M, base_seed=state.base_seed)
 
             # Aggregate summaries (mean of M replicates)
-            s̄ = reduce(+, sims) / M
+            s̄ = mean_summary(sims, M)
 
-            # Accept/reject
-            d = cfg.distance(s̄, summary_obs)
+            # Accept/reject — with frozen adaptive weights when adaptive mode
+            # is active (identical to cfg.distance otherwise).
+            d = adaptive_distance(state, cfg.distance, s̄, summary_obs)
 
             if d <= ε
                 # Accept: compute importance weight
@@ -198,12 +199,23 @@ Built-in schedules:
 - `QuantileSchedule` — uses `distances` (non‑adaptive: `state.dists`;
   adaptive: `state.adaptive.epsilon_distances`).
 
-If `adaptive` is provided, at each generation boundary (after generation t ≥ 1)
-the inverse‑distance weights are re‑estimated from the accepted summaries and
-the current generation's distances are recomputed under the new weights. The
-schedule then receives those recomputed distances. `state.dists` always holds
-the acceptance distances computed with the weights governing the completed
-generation — it is never overwritten by recomputed distances.
+Required adaptive lifecycle (one boundary per completed generation):
+
+1. run generation `t` with one frozen weight vector and ε;
+2. estimate weights for `t + 1` from generation `t` accepted summaries;
+3. recompute generation `t` acceptance distances under the new weights;
+4. derive ε for `t + 1` from those recomputed distances (the schedule);
+5. freeze weights and `state.adaptive.epsilon`;
+6. checkpoint all restart-critical adaptive state;
+7. run generation `t + 1` — weights and ε never change mid-generation.
+
+`state.dists` always holds the acceptance distances computed with the weights
+governing the completed generation — it is never overwritten by the
+recomputed (epsilon-selection) distances.
+
+Resuming a checkpointed adaptive run re-supplies the same `adaptive` config;
+the runtime state itself (key order, weights, distances, ε) comes from the
+checkpoint.
 
 If `checkpoint_dir` is given, an atomic checkpoint is written after
 initialization and after every completed generation (`state_gen_XXX.jls`).
@@ -215,41 +227,44 @@ function run_smc!(state::ABCSMCState, summary_obs;
                   adaptive::Union{Nothing,AdaptiveDistanceConfig}=nothing,
                   checkpoint_dir::Union{Nothing,AbstractString}=nothing)
 
-    # Attach adaptive config to state if provided and not already present.
+    # ── Attach or resume adaptive mode ───────────────────────────────────────
+    if state.adaptive !== nothing && adaptive === nothing
+        throw(ArgumentError(
+            "this state carries adaptive distance state (checkpointed adaptive " *
+            "run); re-supply the same `adaptive` config to resume it"))
+    end
     if adaptive !== nothing && state.adaptive === nothing
+        summary_obs isa NamedTuple || throw(ArgumentError(
+            "adaptive distance scaling requires NamedTuple summaries; got an " *
+            "observation of type $(typeof(summary_obs))"))
+        key_order = collect(Symbol, keys(summary_obs))
+        # Unit initialization: generation 1 runs with unit weights — the same
+        # distances as a non-adaptive run — until the first boundary.
         state.adaptive = AdaptiveDistanceState(
-            adaptive.strategy,
-            adaptive.key_order,   # will be set below from first summaries
-            copy(adaptive.policy),
-            nothing,   # weights — estimated after gen 1
-            state.gen, # gen_estimated
-            nothing,   # epsilon_distances
-            adaptive.epsilon0, # epsilon
-        )
+            key_order,
+            _initial_weights(adaptive.initializer, key_order),
+            state.gen,
+            Float64[],
+            state.ε)
     end
 
     # Run generation‑1 if not already present
     if state.gen == 0
         initialize!(state, summary_obs; max_attempts=max_attempts)
-        # Initialize adaptive key order from the first summaries.
+        # Boundary after generation 1: estimate weights for generation 2.
         if state.adaptive !== nothing
-            st = state.adaptive
-            st.key_order = collect(keys(state.summaries[1]))
-            # Resize weights placeholder to match summary dimension.
-            st.weights = nothing
+            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
         end
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     for t in (state.gen + 1):T
-        # ── Generation boundary: adapt from completed generation t‑1 ──
-        if state.gen >= 1 && state.adaptive !== nothing
-            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
-        end
-
-        # ── Select distances for the schedule ──
+        # ── Distance vector the schedule derives ε_t from ────────────────────
+        # Non-adaptive: acceptance distances of the completed generation.
+        # Adaptive: those distances recomputed at the boundary under the newly
+        # estimated weights.
         distances = (state.adaptive !== nothing &&
-                     state.adaptive.epsilon_distances !== nothing) ?
+                     !isempty(state.adaptive.epsilon_distances)) ?
                     state.adaptive.epsilon_distances : state.dists
 
         # ── Call schedule (3‑arg if supported, else 2‑arg for back‑compat) ──
@@ -259,8 +274,21 @@ function run_smc!(state::ABCSMCState, summary_obs;
                     schedule(state, t)
                 end
 
+        if state.adaptive !== nothing
+            # Freeze ε_t for generation t — nothing changes mid-generation.
+            state.adaptive.epsilon = Float64(ε_new)
+        end
+
         run_generation!(state, summary_obs; ε=ε_new, M=M,
                         max_attempts=max_attempts)
+
+        # ── Boundary after the completed generation: estimate + recompute for
+        #    the next one. `state.dists` keeps the completed generation's
+        #    acceptance distances.
+        if state.adaptive !== nothing
+            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
+        end
+
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
@@ -269,6 +297,21 @@ end
 
 # Helper: extract the base distance function from the state's config.
 cfg_distance(state::ABCSMCState) = state.cfg.distance
+
+# Mean of M replicate summaries. Scalars and vectors keep the historical
+# `reduce(+, sims) / M` path; NamedTuple summaries are averaged key-wise (a
+# single replicate is returned unchanged, so the default M = 1 path is
+# bit-identical to previous releases).
+function mean_summary(sims, M::Int)
+    M == 1 && return sims[1]
+    s1 = sims[1]
+    if s1 isa NamedTuple
+        return NamedTuple{keys(s1)}(map(keys(s1)) do k
+            sum(s[k] for s in sims) / M
+        end)
+    end
+    return reduce(+, sims) / M
+end
 
 """
     run_smc(cfg::ABCSMCConfig, summary_obs; N, T, schedule = QuantileSchedule(0.5),
@@ -298,6 +341,9 @@ Keywords:
     (default) infers it by drawing one prior sample with a throwaway RNG and
     discarding the value; pass the type to skip that draw
   - `max_attempts` — attempts allowed per particle before erroring
+  - `adaptive`      — an [`AdaptiveDistanceConfig`](@ref) enabling adaptive
+    inverse‑distance scaling (estimator, initializer, numerical policy);
+    `nothing` (default) keeps the plain distance
   - `checkpoint_dir` — if given, an atomic checkpoint is written after generation 1
     and after every completed generation. Resume with [`load_latest_state`](@ref)
     plus [`run_smc!`](@ref) — calling `run_smc` again would restart from scratch
