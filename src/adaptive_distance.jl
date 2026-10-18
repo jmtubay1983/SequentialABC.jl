@@ -45,7 +45,14 @@ abstract type AbstractScaleStrategy end
 No scaling: every inverse-distance weight is 1.0, so adaptive mode is
 numerically identical to a plain non-adaptive run. The compatibility default.
 """
-struct NoAdaptation <: AbstractScaleStrategy end
+struct NoAdaptation <: AbstractScaleStrategy
+    function NoAdaptation(; kwargs...)
+        isempty(kwargs) || throw(ArgumentError(
+            "NoAdaptation carries no policy fields; floor, constant_policy and " *
+            "max_weight belong to NumericalPolicy"))
+        return new()
+    end
+end
 
 """
     FixedScale(weights::AbstractVector{<:Real}) <: AbstractScaleStrategy
@@ -78,7 +85,14 @@ supplied separately via [`NumericalPolicy`](@ref) and shared through
 Importance-weighted standard deviation and MAD-based estimators are deferred
 to a later release.
 """
-struct StandardDeviationScale <: AbstractScaleStrategy end
+struct StandardDeviationScale <: AbstractScaleStrategy
+    function StandardDeviationScale(; kwargs...)
+        isempty(kwargs) || throw(ArgumentError(
+            "StandardDeviationScale carries no policy fields; floor, " *
+            "constant_policy and max_weight belong to NumericalPolicy"))
+        return new()
+    end
+end
 
 # ── estimator source and initializer identifiers ──────────────────────────────
 
