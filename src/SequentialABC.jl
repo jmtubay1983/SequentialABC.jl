@@ -82,15 +82,18 @@ export ABCSimulator,
        ContinuousSimulator,
        ABCSMCConfig,
        ABCSMCState,
-       # Adaptive distance scaling (config + accessors; AdaptiveDistanceState
-       # is internal and not exported).
-       NumericalPolicy,
+       # Adaptive distance scaling — stable configuration types only.
+       # AdaptiveDistanceState and the lifecycle helpers (adaptive_distance,
+       # update_adaptive!, estimate_weights) are internal; state is inspected
+       # read-only through `state.adaptive`.
+       AbstractScaleStrategy,
        NoAdaptation,
        FixedScale,
        StandardDeviationScale,
+       PreviousGenAccepted,
+       UnitInit,
+       NumericalPolicy,
        AdaptiveDistanceConfig,
-       adaptive_distance,
-       update_adaptive!,
        GaussianKernel,
        AdaptiveKernel,
        OnlineCovEstimator,

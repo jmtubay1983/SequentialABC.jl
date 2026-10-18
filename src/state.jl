@@ -15,6 +15,7 @@ Fields:
   - base_seed::Int           — base RNG seed for deterministic replication
   - n_attempts::Int          — accepted‑particle attempts this generation (diagnostic)
   - n_resamples::Int         — cumulative number of population resamplings (diagnostic)
+  - adaptive                 — adaptive distance runtime state or `nothing`
 """
 mutable struct ABCSMCState{C,Tθ,Tsum}
     cfg::C
@@ -28,6 +29,7 @@ mutable struct ABCSMCState{C,Tθ,Tsum}
     base_seed::Int
     n_attempts::Int
     n_resamples::Int
+    adaptive::Union{Nothing, AdaptiveDistanceState}
 end
 
 """
@@ -36,10 +38,12 @@ end
 Construct an empty generation‑0 state. `Tθ` is the raw parameter type from the prior;
 `Tsum` starts as `Any` and gets retyped in `initialize!` from the first simulation result.
 """
-function make_state(cfg::ABCSMCConfig, ::Type{Tθ}, N::Int, ε0::Float64, base_seed::Int) where {Tθ}
+function make_state(cfg::ABCSMCConfig, ::Type{Tθ}, N::Int, ε0::Float64,
+                   base_seed::Int) where {Tθ}
     θ = Vector{Tθ}(undef, N)
     w = fill(1.0 / N, N)
     summaries = Vector{Any}(undef, N)
     dists = zeros(Float64, N)
-    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, dists, ε0, 0, Float64(N), base_seed, 0, 0)
+    return ABCSMCState{typeof(cfg), Tθ, Any}(cfg, θ, w, summaries, dists, ε0, 0,
+                                             Float64(N), base_seed, 0, 0, nothing)
 end
