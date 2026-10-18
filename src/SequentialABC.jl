@@ -9,6 +9,7 @@ using LogExpFunctions
 
 include("simulator.jl")
 include("config.jl")
+include("adaptive_distance.jl")
 include("state.jl")
 include("schedules.jl")
 include("rng.jl")
@@ -81,6 +82,15 @@ export ABCSimulator,
        ContinuousSimulator,
        ABCSMCConfig,
        ABCSMCState,
+       # Adaptive distance scaling (config + accessors; AdaptiveDistanceState
+       # is internal and not exported).
+       NumericalPolicy,
+       NoAdaptation,
+       FixedScale,
+       StandardDeviationScale,
+       AdaptiveDistanceConfig,
+       adaptive_distance,
+       update_adaptive!,
        GaussianKernel,
        AdaptiveKernel,
        OnlineCovEstimator,
