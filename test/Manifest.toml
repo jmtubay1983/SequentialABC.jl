@@ -2,7 +2,7 @@
 
 julia_version = "1.10.12"
 manifest_format = "2.1"
-project_hash = "04f1e1c25a4b25fe35b1bfec3e410ea1e863bbca"
+project_hash = "07135ff88865d4365e5feae034ef9adc4bd3fd7d"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -977,17 +977,6 @@ deps = ["Dates", "Random"]
 git-tree-sha1 = "084c47c7c5ce5cfecefa0a98dff69eb3646b5a80"
 uuid = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
 version = "1.4.10"
-
-[[deps.SequentialABC]]
-deps = ["Distributions", "LinearAlgebra", "LogExpFunctions", "Random", "Serialization", "Statistics", "StatsBase"]
-path = ".."
-uuid = "9ec30f26-5bd5-453c-9fb9-4a291198e4b8"
-version = "0.3.0"
-weakdeps = ["Plots", "StatsPlots"]
-
-    [deps.SequentialABC.extensions]
-    PlotsExt = "Plots"
-    StatsPlotsExt = "StatsPlots"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
