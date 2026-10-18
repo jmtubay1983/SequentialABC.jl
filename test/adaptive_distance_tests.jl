@@ -34,8 +34,8 @@ cfg_scalar = ABCSMCConfig(
 )
 
 # 2-key model with deliberately heterogeneous summary scales:
-#   key :a — informative, low variance   (θ₁ ~ N(0, 2.5) + N(0,1) noise)
-#   key :b — irrelevant, high variance   (θ₂ ~ N(0, 25)  + N(0,1) noise)
+#   key :a — low variance, tight prior    (θ₁ ~ N(0, 2.5) + N(0,1) noise)
+#   key :b — diffuse, high variance       (θ₂ ~ N(0, 25)  + N(0,1) noise)
 PRIOR_A = Normal(0.0, 2.5)
 PRIOR_B = Normal(0.0, 25.0)
 sample_prior_2key = rng -> [rand(rng, PRIOR_A), rand(rng, PRIOR_B)]
@@ -59,6 +59,21 @@ N = 100
 # helpers stay unexported (constraint: configuration types only).
 const estimate_w = SequentialABC.estimate_weights
 const update_ad! = SequentialABC.update_adaptive!
+const adaptive_dist = SequentialABC.adaptive_distance
+const mean_summary = SequentialABC.mean_summary
+
+function weighted_distance_2key(base_distance, s, s_obs, weights)
+    return base_distance(
+        (a = weights[1] * s.a, b = weights[2] * s.b),
+        (a = weights[1] * s_obs.a, b = weights[2] * s_obs.b),
+    )
+end
+
+function write_checkpoint_payload(dir, name, payload)
+    path = joinpath(dir, name)
+    open(io -> serialize(io, payload), path, "w")
+    return path
+end
 
 # ── Configuration tests ──────────────────────────────────────────────────────
 
@@ -136,6 +151,19 @@ end
     @test_throws ArgumentError AdaptiveDistanceConfig(
         StandardDeviationScale(), PreviousGenAccepted(), :prior_predictive,
         NumericalPolicy())
+end
+
+@testset "ABCSMCState eleven-argument compatibility constructor" begin
+    state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
+    initialize!(state, Y_OBS)
+    compatible = ABCSMCState(
+        state.cfg, state.θ, state.w, state.summaries, state.dists, state.ε,
+        state.gen, state.ess, state.base_seed, state.n_attempts,
+        state.n_resamples,
+    )
+    @test compatible.adaptive === nothing
+    @test compatible.θ === state.θ
+    @test compatible.summaries === state.summaries
 end
 
 # ── Weight estimation tests ──────────────────────────────────────────────────
@@ -260,56 +288,124 @@ end
     s1 = state.summaries[1]
     expected = cfg_2key.distance((a = 2.0 * s1.a, b = 0.5 * s1.b),
                                  (a = 2.0 * Y_OBS.a, b = 0.5 * Y_OBS.b))
-    @test state.adaptive.epsilon_distances[1] == expected
+    @test state.adaptive.epsilon_selection_distances[1] == expected
+end
+
+@testset "FixedScale governs generation 1" begin
+    state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
+    fixed = [2.0, 0.5]
+    run_smc!(state, Y_OBS; T = 1, schedule = (_, _) -> error("schedule called"),
+             adaptive = AdaptiveDistanceConfig(FixedScale(fixed)))
+    @test state.adaptive.weights == fixed
+    @test state.adaptive.gen_applied == 1
+    @test isempty(state.adaptive.epsilon_selection_distances)
+    @test state.dists == [weighted_distance_2key(
+        cfg_2key.distance, s, Y_OBS, fixed) for s in state.summaries]
+end
+
+@testset "Deterministic p=2 scale-weight reference check" begin
+    # Fixed fixture: 5 accepted summaries, 2 keys, no constant coordinates and
+    # unit initial weights. Every expected value below is derived from first
+    # principles — arithmetic means, the (n-1) sample-variance formula, inverse
+    # scale weights, scaled coordinate differences, the weighted Euclidean
+    # distance and a sorted median — never from the production helpers under
+    # test.
+    a_vals = [1.0, 2.0, 3.0, 4.0, 5.0]
+    b_vals = [10.0, 20.0, 30.0, 40.0, 50.0]
+    obs_ref = (a = 3.0, b = 30.0)
+    n_ref = 5
+
+    a_mean = sum(a_vals) / n_ref
+    b_mean = sum(b_vals) / n_ref
+    a_var = sum(abs2, a_vals .- a_mean) / (n_ref - 1)
+    b_var = sum(abs2, b_vals .- b_mean) / (n_ref - 1)
+    @test a_var == 2.5                    # known closed-form variances
+    @test b_var == 250.0
+    expected_weights = [1.0 / sqrt(a_var), 1.0 / sqrt(b_var)]
+
+    state = make_state(cfg_2key, Vector{Float64}, n_ref, 3.0, 7)
+    state.summaries = [(a = a_vals[i], b = b_vals[i]) for i in 1:n_ref]
+    state.gen = 1
+    update_ad!(state, AdaptiveDistanceConfig(StandardDeviationScale()),
+               cfg_2key.distance, obs_ref)
+
+    # Estimated inverse standard-deviation weights.
+    @test state.adaptive.weights == expected_weights
+
+    # Scaled coordinate differences and the weighted Euclidean distance of
+    # every accepted summary, evaluated exactly as the p = 2 workflow does:
+    # scale both summaries first, then take the Euclidean distance.
+    w1, w2 = expected_weights
+    expected_distances = [sqrt(((a_vals[i] * w1) - (obs_ref.a * w1))^2 +
+                               ((b_vals[i] * w2) - (obs_ref.b * w2))^2)
+                          for i in 1:n_ref]
+    @test state.adaptive.epsilon_selection_distances == expected_distances
+
+    # Quantile epsilon: with n = 5 the q = 0.5 quantile is exactly the middle
+    # of the sorted expected distances — obtained here by sorting, not by any
+    # production helper.
+    expected_epsilon = sort(expected_distances)[3]
+    @test SequentialABC.epsilon_quantile(
+        state.adaptive.epsilon_selection_distances, 0.5) == expected_epsilon
+    @test QuantileSchedule(0.5)(state, 2,
+                                state.adaptive.epsilon_selection_distances) ==
+          expected_epsilon
 end
 
 # ── Adaptive lifecycle tests ─────────────────────────────────────────────────
 
-@testset "Acceptance distances distinct from epsilon-selection distances" begin
+@testset "T=3 adaptive lifecycle and generation provenance" begin
     ad_config = AdaptiveDistanceConfig(StandardDeviationScale())
     state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
-    run_smc!(state, Y_OBS; T = 3, schedule = FixedSchedule([3.0, 1.5, 0.7]),
-             adaptive = ad_config)
+    preparation_trace = Any[]
+    epsilon_ladder = [3.0, 1.5, 0.7]
 
-    # state.dists: acceptance distances of the final generation, computed with
-    # the weights that governed that generation.
-    @test all(isfinite, state.dists)
-    @test all(>(0), state.dists)
-    @test length(state.dists) == N
-
-    # state.adaptive.epsilon_distances: the same population recomputed at the
-    # boundary under the newly estimated weights.
-    @test state.adaptive !== nothing
-    @test length(state.adaptive.epsilon_distances) == N
-
-    # Different weight vectors → different distance vectors; acceptance
-    # distances were not overwritten by the recomputation.
-    @test state.dists != state.adaptive.epsilon_distances
-    @test state.gen == 3
-end
-
-@testset "Epsilon and distance-weight consistency" begin
-    ad_config = AdaptiveDistanceConfig(StandardDeviationScale())
-    state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
-    run_smc!(state, Y_OBS; T = 3, schedule = FixedSchedule([3.0, 1.5, 0.7]),
-             adaptive = ad_config)
-
-    # Weights were re-estimated at the boundary of the final generation.
-    @test state.adaptive.gen_estimated == 3
-
-    # The epsilon frozen for the last executed generation is the FixedSchedule
-    # entry for t = 3 — finite, positive, and consistent with state.ε.
-    @test state.adaptive.epsilon !== nothing
-    @test isfinite(state.adaptive.epsilon)
-    @test state.adaptive.epsilon > 0
-    @test state.adaptive.epsilon == 0.7
-    @test state.ε == 0.7
-
-    # Weights match 1/std of the generation they were estimated from.
-    for (k, key) in enumerate([:a, :b])
-        s_std = std([s[key] for s in state.summaries])
-        @test isapprox(state.adaptive.weights[k], 1.0 / s_std)
+    instrumented_schedule = function (current_state, t, distances)
+        # The schedule is called immediately after update_adaptive!, while the
+        # accepted summaries still belong to generation t-1.
+        weights = copy(current_state.adaptive.weights)
+        summaries = copy(current_state.summaries)
+        expected = [weighted_distance_2key(cfg_2key.distance, s, Y_OBS, weights)
+                    for s in summaries]
+        push!(preparation_trace, (
+            requested_generation = t,
+            completed_generation = current_state.gen,
+            gen_applied = current_state.adaptive.gen_applied,
+            weights = weights,
+            summaries = summaries,
+            distances = copy(distances),
+        ))
+        @test distances == expected
+        return epsilon_ladder[t]
     end
+
+    run_smc!(state, Y_OBS; T = 3, schedule = instrumented_schedule,
+             adaptive = ad_config)
+
+    # Only generations 2 and 3 are prepared: once each, never generation 4.
+    @test [entry.requested_generation for entry in preparation_trace] == [2, 3]
+    @test [entry.completed_generation for entry in preparation_trace] == [1, 2]
+    @test [entry.gen_applied for entry in preparation_trace] == [2, 3]
+
+    # The final frozen selection vector was computed from generation 2 and used
+    # to choose epsilon_3. It does not describe the generation-3 population.
+    @test state.adaptive !== nothing
+    @test state.adaptive.gen_applied == 3
+    @test state.adaptive.weights == preparation_trace[end].weights
+    @test state.adaptive.epsilon_selection_distances ==
+          preparation_trace[end].distances
+    @test state.adaptive.epsilon == epsilon_ladder[3]
+
+    # state.dists is independently tied to the accepted generation-3 summaries,
+    # evaluated under the same frozen weights_3.
+    final_acceptance_distances = [
+        weighted_distance_2key(cfg_2key.distance, s, Y_OBS,
+                               state.adaptive.weights)
+        for s in state.summaries
+    ]
+    @test state.dists == final_acceptance_distances
+    @test state.gen == 3
+    @test state.ε == epsilon_ladder[3]
 end
 
 @testset "NoAdaptation fixed-seed equivalence to current main" begin
@@ -318,11 +414,15 @@ end
     schedule = FixedSchedule([3.0, 1.5, 0.7])
 
     state_adapt = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
+    dir_adapt = mktempdir()
     run_smc!(state_adapt, Y_OBS; T = 3, schedule = schedule,
-             adaptive = AdaptiveDistanceConfig(NoAdaptation()))
+             adaptive = AdaptiveDistanceConfig(NoAdaptation()),
+             checkpoint_dir = dir_adapt)
 
     state_plain = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
-    run_smc!(state_plain, Y_OBS; T = 3, schedule = schedule)
+    dir_plain = mktempdir()
+    run_smc!(state_plain, Y_OBS; T = 3, schedule = schedule,
+             checkpoint_dir = dir_plain)
 
     @test state_adapt.θ == state_plain.θ
     @test state_adapt.w == state_plain.w
@@ -330,8 +430,62 @@ end
     @test state_adapt.ε == state_plain.ε
     @test state_adapt.gen == state_plain.gen
     @test state_adapt.ess == state_plain.ess
-    # Unit weights at every boundary under NoAdaptation.
-    @test all(==(1.0), state_adapt.adaptive.weights)
+    @test state_adapt.n_attempts == state_plain.n_attempts
+    @test state_adapt.n_resamples == state_plain.n_resamples
+    # NoAdaptation normalizes to the plain non-adaptive path: no adaptive state.
+    @test state_adapt.adaptive === nothing
+
+    payload_adapt = open(deserialize, last(list_checkpoints(dir_adapt))[2])
+    payload_plain = open(deserialize, last(list_checkpoints(dir_plain))[2])
+    @test payload_adapt == payload_plain
+    @test payload_adapt.schema_version == 1
+    @test !haskey(payload_adapt, :adaptive)
+end
+
+@testset "Callable distances on plain and adaptive paths" begin
+    plain = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
+    simulated = (a = 2.0, b = 4.0)
+    observed = (a = 1.0, b = 0.0)
+    ordinary(s, so) = sqrt((s.a - so.a)^2 + (s.b - so.b)^2)
+    closure_scale = 2.0
+    closure = (s, so) -> closure_scale * ordinary(s, so)
+    callable = weighted_l2((a = 4.0, b = 0.25))
+
+    @test adaptive_dist(plain, ordinary, simulated, observed) ==
+          ordinary(simulated, observed)
+    @test adaptive_dist(plain, closure, simulated, observed) ==
+          closure(simulated, observed)
+    @test adaptive_dist(plain, callable, simulated, observed) ==
+          callable(simulated, observed)
+
+    initialize!(plain, Y_OBS)
+    update_ad!(plain, AdaptiveDistanceConfig(FixedScale([2.0, 0.5])),
+               cfg_2key.distance, Y_OBS)
+    scaled_simulated = (a = 2.0 * simulated.a, b = 0.5 * simulated.b)
+    scaled_observed = (a = 2.0 * observed.a, b = 0.5 * observed.b)
+    @test adaptive_dist(plain, ordinary, simulated, observed) ==
+          ordinary(scaled_simulated, scaled_observed)
+    @test adaptive_dist(plain, closure, simulated, observed) ==
+          closure(scaled_simulated, scaled_observed)
+    @test adaptive_dist(plain, callable, simulated, observed) ==
+          callable(scaled_simulated, scaled_observed)
+end
+
+@testset "mean_summary preserves legacy and named-summary behavior" begin
+    @test mean_summary([2.0], 1) == 2.0
+    @test mean_summary([2.0, 4.0], 2) == 3.0
+    # M = 1 returns the sole replicate unchanged (identity, no arithmetic).
+    v_m1 = [2.0, 4.0]
+    @test mean_summary([v_m1], 1) === v_m1
+    @test mean_summary([[2.0, 4.0], [4.0, 8.0]], 2) == [3.0, 6.0]
+    named = (a = 2.0, b = 4.0)
+    @test mean_summary([named], 1) === named
+    @test mean_summary([(a = 2.0, b = 4.0), (a = 4.0, b = 8.0)], 2) ==
+          (a = 3.0, b = 6.0)
+    @test_throws ArgumentError mean_summary(
+        [(a = 1.0, b = 2.0), (a = 3.0, c = 4.0)], 2)
+    @test_throws ArgumentError mean_summary(
+        [(a = 1.0, b = "bad"), (a = 2.0, b = "worse")], 2)
 end
 
 @testset "Deterministic adaptive replay" begin
@@ -350,9 +504,9 @@ end
     @test state1.ε == state2.ε
     @test state1.adaptive.key_order == state2.adaptive.key_order
     @test state1.adaptive.weights == state2.adaptive.weights
-    @test state1.adaptive.epsilon_distances == state2.adaptive.epsilon_distances
+    @test state1.adaptive.epsilon_selection_distances == state2.adaptive.epsilon_selection_distances
     @test state1.adaptive.epsilon == state2.adaptive.epsilon
-    @test state1.adaptive.gen_estimated == state2.adaptive.gen_estimated
+    @test state1.adaptive.gen_applied == state2.adaptive.gen_applied
 end
 
 # ── Schedule tests ───────────────────────────────────────────────────────────
@@ -416,9 +570,24 @@ end
     s_resumed = load_latest_state(dir_part, cfg_2key)
     @test s_resumed.gen == 2
     @test s_resumed.adaptive !== nothing
-    run_smc!(s_resumed, Y_OBS; T = 3, schedule = schedule,
+    resume_trace = Any[]
+    resume_schedule = function (current_state, t, distances)
+        push!(resume_trace, (
+            requested_generation = t,
+            completed_generation = current_state.gen,
+            gen_applied = current_state.adaptive.gen_applied,
+        ))
+        return schedule(current_state, t, distances)
+    end
+    run_smc!(s_resumed, Y_OBS; T = 3, schedule = resume_schedule,
              adaptive = AdaptiveDistanceConfig(StandardDeviationScale()),
              checkpoint_dir = dir_part)
+
+    @test resume_trace == [(
+        requested_generation = 3,
+        completed_generation = 2,
+        gen_applied = 3,
+    )]
 
     # Exact (bitwise) numerical equivalence of the two trajectories.
     @test s_resumed.θ == s_full.θ
@@ -431,9 +600,9 @@ end
     @test s_resumed.n_resamples == s_full.n_resamples
     @test s_resumed.adaptive.key_order == s_full.adaptive.key_order
     @test s_resumed.adaptive.weights == s_full.adaptive.weights
-    @test s_resumed.adaptive.epsilon_distances == s_full.adaptive.epsilon_distances
+    @test s_resumed.adaptive.epsilon_selection_distances == s_full.adaptive.epsilon_selection_distances
     @test s_resumed.adaptive.epsilon == s_full.adaptive.epsilon
-    @test s_resumed.adaptive.gen_estimated == s_full.adaptive.gen_estimated
+    @test s_resumed.adaptive.gen_applied == s_full.adaptive.gen_applied
 end
 
 @testset "Legacy checkpoint loading" begin
@@ -473,13 +642,83 @@ end
              adaptive = ad_config, checkpoint_dir = dir)
 
     state2 = load_latest_state(dir, cfg_2key)
+    payload = open(deserialize, last(list_checkpoints(dir))[2])
+    @test payload.schema_version == 2
+    @test keys(payload.adaptive) == (
+        :key_order,
+        :weights,
+        :gen_applied,
+        :epsilon_selection_distances,
+        :epsilon,
+    )
     @test state2.gen == 2
     @test state2.adaptive !== nothing
     @test state2.adaptive.key_order == state.adaptive.key_order
     @test state2.adaptive.weights == state.adaptive.weights
-    @test state2.adaptive.epsilon_distances == state.adaptive.epsilon_distances
+    @test state2.adaptive.epsilon_selection_distances == state.adaptive.epsilon_selection_distances
     @test state2.adaptive.epsilon == state.adaptive.epsilon
-    @test state2.adaptive.gen_estimated == state.adaptive.gen_estimated
+    @test state2.adaptive.gen_applied == state.adaptive.gen_applied
+end
+
+
+@testset "Checkpoint schema compatibility matrix" begin
+    dir = mktempdir()
+    state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
+    initialize!(state, Y_OBS)
+    base = (
+        θ = state.θ,
+        w = state.w,
+        summaries = state.summaries,
+        dists = state.dists,
+        ε = state.ε,
+        gen = state.gen,
+        ess = state.ess,
+        base_seed = state.base_seed,
+        n_attempts = state.n_attempts,
+        n_resamples = state.n_resamples,
+    )
+    adaptive_block = (
+        key_order = [:a, :b],
+        weights = [1.0, 1.0],
+        gen_applied = 1,
+        epsilon_selection_distances = Float64[],
+        epsilon = state.ε,
+    )
+
+    # Schema 0 is an untagged legacy payload; schema 1 is tagged and plain.
+    schema0 = write_checkpoint_payload(dir, "schema0.jls", base)
+    schema1 = write_checkpoint_payload(
+        dir, "schema1.jls", merge((schema_version = 1,), base))
+    @test load_checkpoint(schema0, cfg_2key).adaptive === nothing
+    @test load_checkpoint(schema1, cfg_2key).adaptive === nothing
+
+    # Declared schema and payload shape must agree exactly.
+    schema0_adaptive = write_checkpoint_payload(
+        dir, "schema0-adaptive.jls", merge(base, (adaptive = adaptive_block,)))
+    schema1_adaptive = write_checkpoint_payload(
+        dir, "schema1-adaptive.jls",
+        merge((schema_version = 1,), base, (adaptive = adaptive_block,)))
+    schema2_plain = write_checkpoint_payload(
+        dir, "schema2-plain.jls", merge((schema_version = 2,), base))
+    future_schema = write_checkpoint_payload(
+        dir, "schema3.jls", merge((schema_version = 3,), base))
+    malformed_version = write_checkpoint_payload(
+        dir, "schema-string.jls", merge((schema_version = "2",), base))
+    malformed_weights = write_checkpoint_payload(
+        dir, "schema2-bad-weights.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (weights = "bad",)),)))
+    inconsistent_lengths = write_checkpoint_payload(
+        dir, "schema2-bad-length.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (weights = [1.0],)),)))
+    @test_throws ArgumentError load_checkpoint(schema0_adaptive, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(schema1_adaptive, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(schema2_plain, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(future_schema, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(malformed_version, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(malformed_weights, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(inconsistent_lengths, cfg_2key)
 end
 
 # ── Scalar summary tests ─────────────────────────────────────────────────────
@@ -493,8 +732,8 @@ end
     @test state.adaptive.key_order == [:value]
     @test length(state.adaptive.weights) == 1
     @test state.adaptive.weights[1] > 0
-    @test length(state.adaptive.epsilon_distances) == N
-    @test all(isfinite, state.adaptive.epsilon_distances)
+    @test length(state.adaptive.epsilon_selection_distances) == N
+    @test all(isfinite, state.adaptive.epsilon_selection_distances)
 end
 
 # ── Heterogeneous / informative summary tests ───────────────────────────────
@@ -514,9 +753,9 @@ end
     @test state.adaptive.weights[1] > state.adaptive.weights[2]
 end
 
-@testset "Informative plus irrelevant high-variance summaries" begin
-    # Key :a is informative (low variance), key :b is noise (high variance):
-    # the noise key must be down-weighted.
+@testset "Heterogeneous-scale informative summaries" begin
+    # Key :a has low spread (tight prior), key :b has high spread (diffuse
+    # prior): the diffuse key must be down-weighted.
     state = make_state(cfg_2key, Vector{Float64}, N, 3.0, 1234)
     initialize!(state, Y_OBS)
     update_ad!(state, AdaptiveDistanceConfig(StandardDeviationScale()),
@@ -535,7 +774,7 @@ end
 
 # ── Posterior accuracy on a tractable model ──────────────────────────────────
 
-@testset "Posterior accuracy on tractable model" begin
+@testset "Posterior mean sanity check" begin
     # θ ~ N(0,5), summary = θ + N(0,1), observed summary 1.0:
     # posterior θ | s ≈ N(25/26, 25/26), mean ≈ 0.9615.
     state = make_state(cfg_scalar, Vector{Float64}, N, 3.0, 9999)
@@ -569,7 +808,7 @@ end
     @test all(>(0), state.w)
     @test state.adaptive !== nothing
     @test state.adaptive.key_order == [:a, :b]
-    @test state.adaptive.gen_estimated == 4
+    @test state.adaptive.gen_applied == 4
     @test isfinite(state.adaptive.epsilon)
     @test state.adaptive.epsilon > 0
 
