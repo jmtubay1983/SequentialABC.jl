@@ -1,4 +1,6 @@
 using Test
+using Plots
+using StatsPlots
 using SequentialABC
 using Random
 
@@ -56,4 +58,29 @@ end
 
     # unknown backends are rejected
     @test_throws ArgumentError plot_marginals(history; backend = :bogus)
+end
+
+@testset "Plots extensions" begin
+    @test Base.get_extension(SequentialABC, :PlotsExt) !== nothing
+    @test Base.get_extension(SequentialABC, :StatsPlotsExt) !== nothing
+    @test SequentialABC._plots_available()
+
+    history = _synthetic_history()
+
+    # plot functions work with backend = :plots (return Plots figures, not PlotSpec)
+    m = plot_marginals(history; backend = :plots)
+    @test !(m isa PlotSpec)
+
+    tr = plot_trace(history; backend = :plots)
+    @test !(tr isa PlotSpec)
+
+    dg = plot_diagnostics(history; backend = :plots)
+    @test !(dg isa PlotSpec)
+
+    pp = plot_ppc(history, 0.0; backend = :plots)
+    @test !(pp isa PlotSpec)
+
+    # plot_pairs with backend = :plots
+    p = plot_pairs(history; backend = :plots)
+    @test !(p isa PlotSpec)
 end

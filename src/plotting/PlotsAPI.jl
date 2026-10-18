@@ -3,8 +3,9 @@
 # Lightweight, optional plotting API for ABC‑SMC results.
 #
 # The heavy plotting backends (Plots.jl, StatsPlots.jl) are deliberately NOT
-# dependencies of SequentialABC. They are loaded lazily — and only when a
-# plotting function is called with `backend = :plots` — through Requires.jl.
+# dependencies of SequentialABC. They are loaded lazily as Julia extensions —
+# only when a plotting function is called with `backend = :plots` and the
+# corresponding extension (PlotsExt or StatsPlotsExt) is available.
 # Calling with `backend = :none` returns a dependency‑free `PlotSpec` that
 # describes the figure, which keeps the package test suite plotting‑free.
 #
@@ -14,8 +15,6 @@
 #   * plot_trace        — weighted parameter means across generations
 #   * plot_diagnostics  — ε, ESS and attempt counts across generations
 #   * plot_ppc          — posterior predictive check vs the observed summary
-
-using Requires
 
 """
     PlotSpec
@@ -37,30 +36,15 @@ struct PlotSpec
     options::NamedTuple
 end
 
-const _PLOTS_MOD = Ref{Any}(nothing)
-const _STATSPLOTS_MOD = Ref{Any}(nothing)
-
 """
     _plots_available() -> Bool
 
-`true` when Plots.jl has been loaded into the current session, i.e. when
-`backend = :plots` can actually render figures.
+`true` when the PlotsExt extension has been loaded into the current session,
+i.e. when `backend = :plots` can actually render figures.
 """
-_plots_available() = _PLOTS_MOD[] !== nothing
+_plots_available() = Base.get_extension(SequentialABC, :PlotsExt) !== nothing
 
-# Requires hooks: the block body runs the moment Plots / StatsPlots is loaded,
-# whether that happens before or after SequentialABC.
-function __init__()
-    @require Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80" begin
-        _PLOTS_MOD[] = Plots
-    end
-    @require StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd" begin
-        _STATSPLOTS_MOD[] = StatsPlots
-    end
-    return nothing
-end
-
-# --- data extraction helpers -------------------------------------------------
+# --- data extraction helpers ---
 
 _default_labels(d::Integer) = ["θ$j" for j in 1:d]
 
@@ -75,7 +59,7 @@ function _theta_matrix(st)
     rows = [_particle_vector(θ[i]) for i in eachindex(θ)]
     d = length(rows[1])
     A = Matrix{Float64}(undef, length(rows), d)
-    @inbounds for i in eachindex(rows), j in 1:d
+    @inbounds for i in eachindex(rows), j in eachindex(rows[1])
         A[i, j] = rows[i][j]
     end
     return A
@@ -89,7 +73,7 @@ _scalar_summary(x) = Float64(x)
 
 _resolve_labels(labels, d) = labels === nothing ? _default_labels(d) : collect(String, labels)
 
-# --- public plotting functions ----------------------------------------------
+# --- public plotting functions ---
 
 """
     plot_marginals(history; backend=:plots, labels=nothing, nbins=30)
@@ -108,7 +92,8 @@ function plot_marginals(history; backend::Symbol = :plots, labels = nothing, nbi
     d = size(A, 2)
     labs = _resolve_labels(labels, d)
     data = (labels = labs, values = A, weights = w, means = _wmean(A, w))
-    return _render(:marginals, data, (nbins = nbins,); backend = backend)
+    opts = (nbins = nbins,)
+    return _dispatch(:marginals, data, opts; backend = backend)
 end
 
 """
@@ -118,9 +103,9 @@ Pairwise joint posteriors (a pyABC‑style corner plot). Particles are resampled
 according to their importance weights with the deterministic `seed`, so the
 figure is reproducible.
 
-Requires StatsPlots.jl for the corner layout; if StatsPlots is not loaded a
-plain scatter matrix of the Plots.jl backend is used instead. Returns a `Plots.jl`
-figure when `backend = :plots`, or a [`PlotSpec`](@ref) when `backend = :none`.
+`history` is either a single [`ABCSMCState`](@ref) or a vector of per‑generation
+states. Returns a `Plots.jl` figure when `backend = :plots`, or a
+[`PlotSpec`](@ref) when `backend = :none`.
 """
 function plot_pairs(history; backend::Symbol = :plots, labels = nothing, seed::Int = 0)
     st = _final_state(history)
@@ -130,7 +115,8 @@ function plot_pairs(history; backend::Symbol = :plots, labels = nothing, seed::I
     labs = _resolve_labels(labels, d)
     idx = systematic_resample(w, MersenneTwister(seed))
     data = (labels = labs, values = A, weights = w, resample = idx)
-    return _render(:pairs, data, NamedTuple(); backend = backend)
+    opts = NamedTuple()
+    return _dispatch(:pairs, data, opts; backend = backend, seed = seed)
 end
 
 """
@@ -151,7 +137,8 @@ function plot_trace(history; backend::Symbol = :plots, labels = nothing)
         means[r, :] = _wmean(_theta_matrix(st), collect(Float64, st.w))
     end
     data = (labels = labs, gens = gens, means = means)
-    return _render(:trace, data, NamedTuple(); backend = backend)
+    opts = NamedTuple()
+    return _dispatch(:trace, data, opts; backend = backend)
 end
 
 """
@@ -170,7 +157,8 @@ function plot_diagnostics(history; backend::Symbol = :plots)
     cum = [st.n_attempts for st in states]
     attempts = [cum[1]; diff(cum)]
     data = (gens = gens, epsilons = epsilons, ess = essv, attempts = attempts)
-    return _render(:diagnostics, data, NamedTuple(); backend = backend)
+    opts = NamedTuple()
+    return _dispatch(:diagnostics, data, opts; backend = backend)
 end
 
 """
@@ -186,109 +174,23 @@ function plot_ppc(history, summary_obs; backend::Symbol = :plots, nbins::Int = 2
     simulated = [_scalar_summary(s) for s in st.summaries]
     observed = _scalar_summary(summary_obs)
     data = (simulated = simulated, observed = observed)
-    return _render(:ppc, data, (nbins = nbins,); backend = backend)
+    opts = (nbins = nbins,)
+    return _dispatch(:ppc, data, opts; backend = backend)
 end
 
-# --- backend dispatch --------------------------------------------------------
+# --- backend dispatch ---
 
-function _render(kind::Symbol, data::NamedTuple, opts::NamedTuple; backend::Symbol)
+function _dispatch(kind::Symbol, data::NamedTuple, opts::NamedTuple; backend::Symbol, kwargs...)
     if backend === :none
         return PlotSpec(kind, data, opts)
     elseif backend === :plots
-        P = _PLOTS_MOD[]
-        P === nothing && error(
+        ext = Base.get_extension(SequentialABC, :PlotsExt)
+        ext === nothing && error(
             "backend = :plots requires Plots.jl; run `using Plots` " *
             "(and `using StatsPlots` for pairwise plots) first, or use backend = :none."
         )
-        return _render_impl(kind, data, opts, P, _STATSPLOTS_MOD[])
+        return ext._plot(kind, data, opts; kwargs...)
     else
         throw(ArgumentError("unknown plotting backend $(repr(backend)); use :plots or :none"))
-    end
-end
-
-function _render_impl(kind::Symbol, data::NamedTuple, opts::NamedTuple, Plots, StatsPlots)
-    if kind === :marginals
-        d = size(data.values, 2)
-        nb = get(opts, :nbins, 30)
-        ps = map(1:d) do j
-            p = Plots.histogram(data.values[:, j];
-                weights = data.weights, bins = nb, normalize = :pdf,
-                alpha = 0.6, legend = false, framestyle = :box,
-                title = data.labels[j], xlabel = data.labels[j], ylabel = "density")
-            Plots.vline!(p, [data.means[j]]; color = :red, linewidth = 2)
-            return p
-        end
-        layout_opts = (layout = (1, d), size = (360 * d, 340),
-                       plot_title = "Marginal posteriors", top_margin = 8Plots.mm,
-                       left_margin = 5Plots.mm, right_margin = 3Plots.mm,
-                       bottom_margin = 6Plots.mm)
-        # with a single panel the subplot title sits directly under the layout
-        # title, so reserve some vertical space for the latter
-        d == 1 && (layout_opts = merge(layout_opts, (plot_titlevspan = 0.12,)))
-        return Plots.plot(ps...; layout_opts...)
-
-    elseif kind === :pairs
-        d = size(data.values, 2)
-        A = data.values[data.resample, :]
-        if StatsPlots !== nothing && d > 1
-            try
-                return StatsPlots.cornerplot(A; framestyle = :box)
-            catch
-                # fall back to a plain scatter matrix below
-            end
-        end
-        if d == 1
-            return Plots.histogram(A[:, 1]; normalize = :pdf, legend = false,
-                                   framestyle = :box,
-                                   title = data.labels[1], plot_title = "Pairwise posteriors")
-        end
-        pairs = [(i, j) for i in 1:d for j in (i + 1):d]
-        ps = map(pairs) do (i, j)
-            Plots.scatter(A[:, j], A[:, i]; markersize = 2, alpha = 0.5, legend = false,
-                          framestyle = :box,
-                          xlabel = data.labels[j], ylabel = data.labels[i])
-        end
-        return Plots.plot(ps...; layout = (1, length(ps)),
-                          size = (320 * length(ps), 340), plot_title = "Pairwise posteriors",
-                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
-                          bottom_margin = 6Plots.mm)
-
-    elseif kind === :trace
-        return Plots.plot(data.gens, data.means;
-            label = permutedims(data.labels), marker = :circle, linewidth = 2,
-            framestyle = :box,
-            xlabel = "generation", ylabel = "posterior mean",
-            plot_title = "Parameter trace (weighted means)")
-
-    elseif kind === :diagnostics
-        p1 = Plots.plot(data.gens, data.epsilons; label = "ε", marker = :circle,
-                        linewidth = 2, framestyle = :box,
-                        xlabel = "generation", ylabel = "ε", title = "Tolerance")
-        p2 = Plots.plot(data.gens, data.ess; label = "ESS", marker = :circle,
-                        linewidth = 2, framestyle = :box,
-                        xlabel = "generation", ylabel = "ESS",
-                        title = "Effective sample size")
-        p3 = Plots.plot(data.gens, data.attempts; label = "attempts", marker = :circle,
-                        linewidth = 2, framestyle = :box,
-                        xlabel = "generation", ylabel = "attempts",
-                        title = "Simulation attempts")
-        return Plots.plot(p1, p2, p3; layout = (1, 3), size = (960, 340),
-                          plot_title = "ABC‑SMC diagnostics",
-                          plot_titlefontsize = 14, plot_titlevspan = 0.14,
-                          top_margin = 6Plots.mm,
-                          left_margin = 5Plots.mm, right_margin = 3Plots.mm,
-                          bottom_margin = 6Plots.mm)
-
-    elseif kind === :ppc
-        nb = get(opts, :nbins, 20)
-        p = Plots.histogram(data.simulated; bins = nb, normalize = :pdf, alpha = 0.6,
-                            framestyle = :box, label = "posterior predictive",
-                            xlabel = "summary",
-                            ylabel = "density", plot_title = "Posterior predictive check")
-        Plots.vline!(p, [data.observed]; label = "observed", color = :red, linewidth = 2)
-        return p
-
-    else
-        throw(ArgumentError("unknown plot kind $(repr(kind))"))
     end
 end
