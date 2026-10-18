@@ -33,6 +33,22 @@ mutable struct ABCSMCState{C,Tθ,Tsum}
 end
 
 """
+    ABCSMCState(cfg, θ, w, summaries, dists, ε, gen, ess, base_seed,
+                n_attempts, n_resamples)
+
+Compatibility constructor matching the pre-adaptive eleven-argument form: the
+`adaptive` field defaults to `nothing` (a plain, non-adaptive state). Library
+code that builds non-adaptive states passes `nothing` explicitly; this outer
+form keeps existing positional construction sites source-compatible.
+"""
+function ABCSMCState(cfg, θ, w, summaries, dists, ε, gen, ess, base_seed,
+                     n_attempts, n_resamples)
+    return ABCSMCState{typeof(cfg), eltype(θ), eltype(summaries)}(
+        cfg, θ, w, summaries, dists, ε, gen, ess, base_seed, n_attempts,
+        n_resamples, nothing)
+end
+
+"""
     make_state(cfg::ABCSMCConfig, ::Type{Tθ}, N::Int, ε0::Float64, base_seed::Int)
 
 Construct an empty generation‑0 state. `Tθ` is the raw parameter type from the prior;

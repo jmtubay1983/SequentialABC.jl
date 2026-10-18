@@ -197,25 +197,32 @@ Built-in schedules:
 
 - `FixedSchedule` — ignores `distances`, returns `εs[t]`.
 - `QuantileSchedule` — uses `distances` (non‑adaptive: `state.dists`;
-  adaptive: `state.adaptive.epsilon_distances`).
+  adaptive: `state.adaptive.epsilon_selection_distances`).
 
-Required adaptive lifecycle (one boundary per completed generation):
+Required adaptive lifecycle — preparation runs *before* each upcoming
+generation and stops after the final requested one:
 
-1. run generation `t` with one frozen weight vector and ε;
-2. estimate weights for `t + 1` from generation `t` accepted summaries;
-3. recompute generation `t` acceptance distances under the new weights;
-4. derive ε for `t + 1` from those recomputed distances (the schedule);
-5. freeze weights and `state.adaptive.epsilon`;
-6. checkpoint all restart-critical adaptive state;
-7. run generation `t + 1` — weights and ε never change mid-generation.
+1. run generation 1 with unit weights and `ε0`;
+2. before generation `t` (2 ≤ t ≤ T), exactly once:
+   a. estimate `weights_t` from generation `t-1` accepted summaries;
+   b. recompute generation `t-1` acceptance distances under `weights_t`;
+   c. derive `ε_t` from those recomputed distances (the schedule);
+   d. freeze `weights_t`, `ε_t`, and `gen_applied = t`;
+   e. run generation `t` — weights and ε never change mid-generation;
+3. after generation `T`, stop: no `weights_{T+1}` is estimated and the
+   schedule is never called for generation `T+1`.
 
-`state.dists` always holds the acceptance distances computed with the weights
-governing the completed generation — it is never overwritten by the
-recomputed (epsilon-selection) distances.
+On checkpoint resume, the boundary for the upcoming generation runs exactly
+once (guarded by `gen_applied < t`). After generation `T` completes,
+`state.dists` / `state.ε` describe generation `T`, and the adaptive fields
+(`weights`, `gen_applied`, `epsilon_selection_distances`, `epsilon`) describe
+generation `gen_applied == T` — never a prepared-but-unrun next generation.
+`state.dists` is never overwritten by recomputation.
 
 Resuming a checkpointed adaptive run re-supplies the same `adaptive` config;
 the runtime state itself (key order, weights, distances, ε) comes from the
-checkpoint.
+checkpoint. `AdaptiveDistanceConfig(NoAdaptation())` normalizes to the
+ordinary non-adaptive path — no adaptive state is allocated or checkpointed.
 
 If `checkpoint_dir` is given, an atomic checkpoint is written after
 initialization and after every completed generation (`state_gen_XXX.jls`).
@@ -227,7 +234,13 @@ function run_smc!(state::ABCSMCState, summary_obs;
                   adaptive::Union{Nothing,AdaptiveDistanceConfig}=nothing,
                   checkpoint_dir::Union{Nothing,AbstractString}=nothing)
 
-    # ── Attach or resume adaptive mode ───────────────────────────────────────
+    # ── Normalize adaptive mode ──────────────────────────────────────────────
+    # NoAdaptation runs the ordinary non-adaptive path: no
+    # AdaptiveDistanceState is allocated, updated, or checkpointed.
+    if adaptive !== nothing && adaptive.strategy isa NoAdaptation
+        adaptive = nothing
+    end
+
     if state.adaptive !== nothing && adaptive === nothing
         throw(ArgumentError(
             "this state carries adaptive distance state (checkpointed adaptive " *
@@ -238,57 +251,40 @@ function run_smc!(state::ABCSMCState, summary_obs;
             "adaptive distance scaling requires NamedTuple summaries; got an " *
             "observation of type $(typeof(summary_obs))"))
         key_order = collect(Symbol, keys(summary_obs))
-        # Unit initialization: generation 1 runs with unit weights — the same
-        # distances as a non-adaptive run — until the first boundary.
+        # Estimated strategies use unit initialization; FixedScale has explicit
+        # weights and applies them from generation 1. Both freeze ε_1 here.
         state.adaptive = AdaptiveDistanceState(
             key_order,
-            _initial_weights(adaptive.initializer, key_order),
-            state.gen,
+            _initial_weights(adaptive.initializer, adaptive.strategy, key_order),
+            max(state.gen, 1),
             Float64[],
-            state.ε)
+            Float64(state.ε))
     end
 
-    # Run generation‑1 if not already present
+    # Run generation‑1 if not already present.
     if state.gen == 0
         initialize!(state, summary_obs; max_attempts=max_attempts)
-        # Boundary after generation 1: estimate weights for generation 2.
-        if state.adaptive !== nothing
-            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
-        end
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
     for t in (state.gen + 1):T
-        # ── Distance vector the schedule derives ε_t from ────────────────────
-        # Non-adaptive: acceptance distances of the completed generation.
-        # Adaptive: those distances recomputed at the boundary under the newly
-        # estimated weights.
-        distances = (state.adaptive !== nothing &&
-                     !isempty(state.adaptive.epsilon_distances)) ?
-                    state.adaptive.epsilon_distances : state.dists
-
-        # ── Call schedule (3‑arg if supported, else 2‑arg for back‑compat) ──
-        ε_new = if Base.applicable(schedule, state, t, distances)
-                    schedule(state, t, distances)
-                else
-                    schedule(state, t)
-                end
-
         if state.adaptive !== nothing
-            # Freeze ε_t for generation t — nothing changes mid-generation.
-            state.adaptive.epsilon = Float64(ε_new)
+            # Exactly-once preparation for generation t — also on resume
+            # (the boundary runs only while the frozen state predates t).
+            if state.adaptive.gen_applied < t
+                update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
+                ε_t = schedule_epsilon(schedule, state, t,
+                                       state.adaptive.epsilon_selection_distances)
+                state.adaptive.epsilon = Float64(ε_t)   # freeze ε_t
+            end
+            ε_run = state.adaptive.epsilon
+        else
+            # Non-adaptive: the schedule derives ε_t from acceptance distances.
+            ε_run = schedule_epsilon(schedule, state, t, state.dists)
         end
 
-        run_generation!(state, summary_obs; ε=ε_new, M=M,
+        run_generation!(state, summary_obs; ε=ε_run, M=M,
                         max_attempts=max_attempts)
-
-        # ── Boundary after the completed generation: estimate + recompute for
-        #    the next one. `state.dists` keeps the completed generation's
-        #    acceptance distances.
-        if state.adaptive !== nothing
-            update_adaptive!(state, adaptive, cfg_distance(state), summary_obs)
-        end
-
         checkpoint_dir === nothing || save_checkpoint(state, checkpoint_dir)
     end
 
@@ -298,19 +294,48 @@ end
 # Helper: extract the base distance function from the state's config.
 cfg_distance(state::ABCSMCState) = state.cfg.distance
 
-# Mean of M replicate summaries. Scalars and vectors keep the historical
-# `reduce(+, sims) / M` path; NamedTuple summaries are averaged key-wise (a
-# single replicate is returned unchanged, so the default M = 1 path is
-# bit-identical to previous releases).
-function mean_summary(sims, M::Int)
-    M == 1 && return sims[1]
-    s1 = sims[1]
-    if s1 isa NamedTuple
-        return NamedTuple{keys(s1)}(map(keys(s1)) do k
-            sum(s[k] for s in sims) / M
-        end)
+# Call the epsilon schedule with the distance vector ε must be derived from,
+# falling back to the historical 2-arg form for custom schedules that accept
+# only `(state, t)`.
+function schedule_epsilon(schedule, state::ABCSMCState, t::Int,
+                          distances::AbstractVector{<:Real})
+    if Base.applicable(schedule, state, t, distances)
+        return schedule(state, t, distances)
     end
-    return reduce(+, sims) / M
+    return schedule(state, t)
+end
+
+# Mean of M replicate summaries. M = 1 returns the sole replicate unchanged
+# (the historical path for every summary type). For M > 1 scalars and vectors
+# keep the historical `reduce(+, sims) / M` path bit-for-bit. NamedTuple
+# summaries — required to route adaptive distance scaling through
+# run_generation! — are averaged key-wise for M > 1, with explicit errors for
+# mismatched keys and non-numeric values.
+function mean_summary(sims, M::Int)
+    s1 = first(sims)
+    M == 1 && return s1
+    if !(s1 isa NamedTuple)
+        return reduce(+, sims) / M
+    end
+    keys1 = keys(s1)
+    for (i, s) in enumerate(sims)
+        s isa NamedTuple || throw(ArgumentError(
+            "replicate summaries must all be NamedTuples with identical keys; " *
+            "replicate $i has $(typeof(s))"))
+        keys(s) == keys1 || throw(ArgumentError(
+            "mismatched summary keys across M replicate summaries: replicate 1 " *
+            "has $(Tuple(keys1)) but replicate $i has $(Tuple(keys(s)))"))
+    end
+    return NamedTuple{keys1}(map(keys1) do k
+        vals = map(sims) do s
+            v = s[k]
+            v isa Real || throw(ArgumentError(
+                "summary key `:$k` has non-numeric value of type $(typeof(v)); " *
+                "cannot average M replicate summaries"))
+            v
+        end
+        sum(vals) / M
+    end)
 end
 
 """
@@ -343,7 +368,8 @@ Keywords:
   - `max_attempts` — attempts allowed per particle before erroring
   - `adaptive`      — an [`AdaptiveDistanceConfig`](@ref) enabling adaptive
     inverse‑distance scaling (estimator, initializer, numerical policy);
-    `nothing` (default) keeps the plain distance
+    `nothing` (default) keeps the plain distance. `NoAdaptation` inside a
+    config normalizes to the plain, non-adaptive path
   - `checkpoint_dir` — if given, an atomic checkpoint is written after generation 1
     and after every completed generation. Resume with [`load_latest_state`](@ref)
     plus [`run_smc!`](@ref) — calling `run_smc` again would restart from scratch

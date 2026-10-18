@@ -14,7 +14,7 @@ Typical choice q = 0.5 (median), used to define ε_{t+1} from population t.
 
 - Non-adaptive mode: pass `state.dists` (acceptance distances from the
   completed generation).
-- Adaptive mode: pass `state.adaptive.epsilon_distances` (recomputed at the
+- Adaptive mode: pass `state.adaptive.epsilon_selection_distances` (recomputed at the
   generation boundary under newly estimated weights).
 """
 function epsilon_quantile(distances::AbstractVector{<:Real}, q::Real,
@@ -28,7 +28,7 @@ end
     epsilon_quantile(state::ABCSMCState, q::Real) -> Float64
 
 Backward-compatible wrapper: uses `state.dists` (acceptance distances) and
-caps at `state.ε`. Prefer [`epsilon_quantile(distances, q, ε_cap)`](@ref)
+caps at `state.ε`. Prefer [`epsilon_quantile`](@ref)
 when you have a specific distance vector.
 """
 function epsilon_quantile(state::ABCSMCState, q::Real)
@@ -49,7 +49,7 @@ small ε without manual tuning.
 
 - `distances` is the vector from which ε is derived:
   - Non-adaptive mode: `state.dists`
-  - Adaptive mode: `state.adaptive.epsilon_distances`
+  - Adaptive mode: `state.adaptive.epsilon_selection_distances`
 - The 2-arg form `(state, t)` is preserved for backward compatibility and uses
   `state.dists`.
 
