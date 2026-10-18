@@ -1,7 +1,16 @@
 using Serialization
 
 const CHECKPOINT_RE = r"^state_gen_(\d+)\.jls$"
-const CHECKPOINT_SCHEMA_VERSION = 1
+
+# Checkpoint schema versions (full matrix in `load_checkpoint`):
+#   0 — unversioned legacy payload (pre-adaptive releases; no tag)
+#   1 — versioned non-adaptive payload
+#   2 — versioned adaptive payload (carries the :adaptive block)
+const CHECKPOINT_SCHEMA_LEGACY = 0
+const CHECKPOINT_SCHEMA_NONADAPTIVE = 1
+const CHECKPOINT_SCHEMA_ADAPTIVE = 2
+# Highest schema version this code can read or write.
+const CHECKPOINT_SCHEMA_VERSION = CHECKPOINT_SCHEMA_ADAPTIVE
 
 _checkpoint_name(gen::Int) = "state_gen_" * lpad(string(gen), 3, '0') * ".jls"
 
@@ -15,9 +24,12 @@ plus adaptive state when present) — never `cfg` and its closures. This makes
 checkpoints portable across Julia versions, code revisions, and Slurm nodes:
 reload with the same (or updated) `cfg` via `load_latest_state`.
 
-A `schema_version` tag is written with every checkpoint so older code can
-recognize checkpoints it cannot read. New code reads both legacy (no tag) and
-new (tagged) checkpoints.
+A `schema_version` tag is written with every checkpoint: `1` for non-adaptive
+payloads, `2` for adaptive payloads (see [`load_checkpoint`](@ref) for the
+compatibility matrix). New code reads legacy (untagged, schema 0), schema-1
+and schema-2 checkpoints; old code cannot read schema-2 adaptive checkpoints
+(unsupported — it ignores the tag and would silently resume without the
+adaptive state).
 
 Atomicity: the payload is written to a `.tmp` file first and then renamed.
 POSIX rename is atomic on the same filesystem, so a job killed mid‑write can
@@ -29,7 +41,9 @@ function save_checkpoint(state::ABCSMCState, dir::AbstractString)
     path = joinpath(dir, _checkpoint_name(state.gen))
     tmp = path * ".tmp"
 
-    data = (schema_version = CHECKPOINT_SCHEMA_VERSION,
+    data = (schema_version = state.adaptive === nothing ?
+                             CHECKPOINT_SCHEMA_NONADAPTIVE :
+                             CHECKPOINT_SCHEMA_ADAPTIVE,
             θ = state.θ,
             w = state.w,
             summaries = state.summaries,
@@ -50,8 +64,8 @@ function save_checkpoint(state::ABCSMCState, dir::AbstractString)
         data = merge(data, (adaptive = (
             key_order = ad.key_order,
             weights = ad.weights,
-            gen_estimated = ad.gen_estimated,
-            epsilon_distances = ad.epsilon_distances,
+            gen_applied = ad.gen_applied,
+            epsilon_selection_distances = ad.epsilon_selection_distances,
             epsilon = ad.epsilon,
         ),))
     end
@@ -87,21 +101,46 @@ end
 Load a single checkpoint file and reattach `cfg` (an `ABCSMCConfig`; it is
 intentionally not serialized — checkpoints carry data only).
 
-Schema handling:
-- New checkpoints (`schema_version` present) restore adaptive state when
-  included in the payload.
-- Legacy checkpoints (no `schema_version` tag, pre‑adaptive) load with
-  `adaptive = nothing` — identical to pre‑adaptive behavior. Old code cannot
-  read new adaptive checkpoints (it will see an unknown `schema_version` key
-  and the extra `adaptive` field).
+Schema handling — the declared version and the payload shape must agree:
+
+| schema | writer | payload | this loader |
+|---|---|---|---|
+| 0 (untagged) | legacy releases | base fields only | loads, `adaptive = nothing` |
+| 1 | this code, non-adaptive | base fields + tag | loads, `adaptive = nothing` |
+| 2 | this code, adaptive | base fields + tag + `:adaptive` | restores adaptive state |
+| > 2 | future code | unknown | **rejected** (`ArgumentError`) |
+
+A schema-2 payload without an `:adaptive` block, or a schema ≤ 1 payload with
+one, is rejected as malformed. **Old (schema-0) code cannot read schema-2
+adaptive checkpoints** — it would ignore the tag and the block and silently
+resume without adaptive state; that is unsupported and not claimed here.
 """
 function load_checkpoint(path::AbstractString, cfg)
     data = open(deserialize, path)
     Tθ   = eltype(data.θ)          # struct parameters hold ELEMENT types (fields are Vector{Tθ})
     Tsum = eltype(data.summaries)
 
-    # Detect schema version; legacy checkpoints (pre‑adaptive) have no tag.
-    schema_version = get(data, :schema_version, 0)
+    # Detect schema version; legacy (pre‑adaptive) checkpoints carry no tag.
+    schema_version = get(data, :schema_version, CHECKPOINT_SCHEMA_LEGACY)
+    schema_version isa Int || throw(ArgumentError(
+        "checkpoint schema_version must be an Int in $path; got " *
+        "$(typeof(schema_version))"))
+    if !(CHECKPOINT_SCHEMA_LEGACY <= schema_version <= CHECKPOINT_SCHEMA_VERSION)
+        throw(ArgumentError(
+            "unsupported checkpoint schema version $schema_version in $path; " *
+            "this code supports 0 (legacy), 1 (non-adaptive) and 2 (adaptive)"))
+    end
+    has_adaptive = haskey(data, :adaptive)
+    if schema_version == CHECKPOINT_SCHEMA_ADAPTIVE && !has_adaptive
+        throw(ArgumentError(
+            "checkpoint $path declares schema version 2 (adaptive) but its " *
+            "payload has no :adaptive block"))
+    end
+    if schema_version <= CHECKPOINT_SCHEMA_NONADAPTIVE && has_adaptive
+        throw(ArgumentError(
+            "checkpoint $path declares non-adaptive schema version " *
+            "$schema_version but its payload carries an :adaptive block"))
+    end
 
     # Build the base state (fields common to all schema versions).
     state = ABCSMCState{typeof(cfg), Tθ, Tsum}(
@@ -109,20 +148,46 @@ function load_checkpoint(path::AbstractString, cfg)
         data.ess, data.base_seed, data.n_attempts, data.n_resamples, nothing
     )
 
-    # Restore adaptive runtime state if present (schema_version >= 1). The
-    # immutable config is re-supplied by the caller via run_smc!(...; adaptive=).
-    if schema_version >= 1 && haskey(data, :adaptive)
-        ad = data.adaptive
-        state.adaptive = AdaptiveDistanceState(
-            ad.key_order,
-            ad.weights,
-            ad.gen_estimated,
-            ad.epsilon_distances,
-            ad.epsilon,
-        )
+    # Restore the adaptive runtime state (schema 2). The immutable config is
+    # re-supplied by the caller via run_smc!(...; adaptive = ...).
+    if has_adaptive
+        state.adaptive = _restore_adaptive_checkpoint(data.adaptive, path)
     end
 
     return state
+end
+
+function _restore_adaptive_checkpoint(ad, path::AbstractString)
+    ad isa NamedTuple || throw(ArgumentError(
+        "checkpoint $path has a malformed :adaptive block of type " *
+        "$(typeof(ad)); expected a NamedTuple"))
+    required = (:key_order, :weights, :gen_applied,
+                :epsilon_selection_distances, :epsilon)
+    missing = filter(name -> !haskey(ad, name), required)
+    isempty(missing) || throw(ArgumentError(
+        "checkpoint $path adaptive block is missing fields $(Tuple(missing))"))
+
+    key_order = ad.key_order
+    key_order isa AbstractVector && all(x -> x isa Symbol, key_order) ||
+        throw(ArgumentError(
+            "checkpoint $path adaptive key_order must be a vector of Symbol"))
+    weights = ad.weights
+    weights isa AbstractVector && all(x -> x isa Real, weights) ||
+        throw(ArgumentError(
+            "checkpoint $path adaptive weights must be a vector of Real"))
+    ad.gen_applied isa Int || throw(ArgumentError(
+        "checkpoint $path adaptive gen_applied must be an Int"))
+    distances = ad.epsilon_selection_distances
+    distances isa AbstractVector && all(x -> x isa Real, distances) ||
+        throw(ArgumentError(
+            "checkpoint $path adaptive epsilon_selection_distances must be " *
+            "a vector of Real"))
+    ad.epsilon isa Real || throw(ArgumentError(
+        "checkpoint $path adaptive epsilon must be Real"))
+
+    return AdaptiveDistanceState(
+        collect(Symbol, key_order), weights, ad.gen_applied, distances,
+        ad.epsilon)
 end
 
 """
