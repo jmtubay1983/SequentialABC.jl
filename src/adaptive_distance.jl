@@ -8,21 +8,22 @@
 #     construction, never mutated, re-supplied by the caller when resuming a
 #     checkpointed run.
 #   * Mutable runtime state — AdaptiveDistanceState (internal): summary key
-#     order, current inverse-distance weights, generation estimated,
-#     epsilon-selection distances, and the next epsilon. Concrete field types
-#     only; checkpointed separately from the configuration.
+#     order, inverse-distance weights and epsilon frozen for `gen_applied`, and
+#     the preceding population's epsilon-selection distances. Concrete field
+#     types only; checkpointed separately from the configuration.
 #
 # Numerical policy lives in exactly one place — NumericalPolicy. Strategy
 # types identify the estimator only and never carry floor / constant-summary /
 # max-weight fields.
 #
-# Distance semantics:
-#   * `state.dists` — acceptance distances computed with the weights that
-#     governed the completed generation; never overwritten by recomputation.
-#   * `state.adaptive.epsilon_distances` — the same accepted summaries
-#     recomputed at the generation boundary under the newly estimated weights;
-#     this is the vector from which the epsilon schedule derives the next
-#     tolerance.
+# Distance semantics (current-generation; preparation runs *before* a
+# generation and stops after the final requested one):
+#   * `state.dists` — acceptance distances of generation `state.gen`, computed
+#     with the weights that governed that generation; never overwritten.
+#   * `state.adaptive.epsilon_selection_distances` — the *preceding* population's
+#     acceptance distances recomputed under the weights that govern
+#     `state.adaptive.gen_applied`; the vector epsilon for that generation was
+#     derived from. Empty for generation 1 (unit initialization).
 
 using Statistics
 
@@ -59,7 +60,9 @@ end
 
 User-supplied per-key inverse-distance weights. `weights` is validated once at
 construction (non-empty, finite, strictly positive) and is applied in the
-stable summary key order owned by the runtime state.
+stable summary key order owned by the runtime state. Unlike an estimated
+strategy, the fixed weights are available immediately and govern generation 1
+as well as every later generation.
 """
 struct FixedScale <: AbstractScaleStrategy
     weights::Vector{Float64}
@@ -109,9 +112,11 @@ struct PreviousGenAccepted end
 """
     UnitInit
 
-Initializer: generation 1 runs with every inverse-distance weight set to
-`1.0` (unit scaling), so the first generation is numerically identical to a
-non-adaptive run. Prior-predictive initialization is deferred.
+Initializer for estimated strategies: generation 1 runs with every
+inverse-distance weight set to `1.0` (unit scaling), so the first generation is
+numerically identical to a non-adaptive run. [`FixedScale`](@ref) already has
+explicit weights and uses them from generation 1. Prior-predictive
+initialization is deferred.
 """
 struct UnitInit end
 
@@ -225,28 +230,34 @@ AdaptiveDistanceConfig(strategy::AbstractScaleStrategy,
 
 Mutable runtime state for adaptive distance scaling. **Internal** — not
 exported; inspect it read-only through `state.adaptive`. All fields have
-concrete types. Fields (restart-critical, persisted with the checkpoint):
+concrete types. After generation `gen_applied` completes, every field describes
+that *current* generation — never a hypothetical next one:
 
   - `key_order::Vector{Symbol}` — stable summary key order
-  - `weights::Vector{Float64}` — inverse-distance weights frozen for the
-    current generation
-  - `gen_estimated::Int` — generation the weights were estimated from
-  - `epsilon_distances::Vector{Float64}` — acceptance distances of the
-    completed generation recomputed under the current weights; the vector the
-    epsilon schedule derives the next tolerance from (distinct from
-    `state.dists`)
-  - `epsilon::Float64` — next / current derived tolerance
+  - `weights::Vector{Float64}` — inverse-distance weights used by generation
+    `gen_applied` (unit weights for generation 1)
+  - `gen_applied::Int` — the generation the stored weights and epsilon were
+    used by; the boundary for generation `t` runs only while `gen_applied < t`,
+    so every upcoming generation is prepared exactly once (also across a
+    checkpoint resume)
+  - `epsilon_selection_distances::Vector{Float64}` — acceptance distances of
+    the *preceding* population (generation `gen_applied - 1`) recomputed under
+    `weights`; the vector epsilon for generation `gen_applied` was derived
+    from. Empty for generation 1 (unit initialization, no preceding
+    population). Distinct from `state.dists` (generation `gen_applied`
+    acceptance distances)
+  - `epsilon::Float64` — epsilon used by generation `gen_applied`
 """
 mutable struct AdaptiveDistanceState
     key_order::Vector{Symbol}
     weights::Vector{Float64}
-    gen_estimated::Int
-    epsilon_distances::Vector{Float64}
+    gen_applied::Int
+    epsilon_selection_distances::Vector{Float64}
     epsilon::Float64
     function AdaptiveDistanceState(key_order::Vector{Symbol},
                                    weights::AbstractVector{<:Real},
-                                   gen_estimated::Int,
-                                   epsilon_distances::AbstractVector{<:Real},
+                                   gen_applied::Int,
+                                   epsilon_selection_distances::AbstractVector{<:Real},
                                    epsilon::Real)
         isempty(key_order) && throw(ArgumentError("adaptive key_order must not be empty"))
         w = Float64.(weights)
@@ -257,17 +268,27 @@ mutable struct AdaptiveDistanceState
         any(>(0), w) || throw(ArgumentError(
             "adaptive weights must have at least one positive entry — all-zero " *
             "weights make every distance zero"))
-        εd = Float64.(epsilon_distances)
+        εd = Float64.(epsilon_selection_distances)
         all(isfinite, εd) || throw(ArgumentError(
             "adaptive epsilon-selection distances must be finite"))
-        return new(collect(Symbol, key_order), w, gen_estimated, εd, Float64(epsilon))
+        return new(collect(Symbol, key_order), w, gen_applied, εd, Float64(epsilon))
     end
 end
 
-# Unit initialization: generation 1 runs with unit weights (exactly the
-# non-adaptive distance) until the first estimation from generation 1.
-_initial_weights(::UnitInit, key_order::Vector{Symbol}) =
+# Unit initialization: an estimated strategy starts generation 1 with unit
+# weights (exactly the non-adaptive distance) until its first estimate.
+_initial_weights(::UnitInit, ::AbstractScaleStrategy, key_order::Vector{Symbol}) =
     ones(Float64, length(key_order))
+
+# FixedScale is already fully specified and therefore applies from generation
+# 1; there is no population estimate to wait for.
+function _initial_weights(::UnitInit, strategy::FixedScale,
+                          key_order::Vector{Symbol})
+    length(strategy.weights) == length(key_order) || throw(ArgumentError(
+        "FixedScale has $(length(strategy.weights)) weights but key_order has " *
+        "$(length(key_order)) keys $(Tuple(key_order))"))
+    return copy(strategy.weights)
+end
 
 # ── weight estimation ────────────────────────────────────────────────────────
 
@@ -374,17 +395,18 @@ end
 # ── adaptive distance computation ────────────────────────────────────────────
 
 """
-    adaptive_distance(state, base_distance::Function, s_sim, s_obs) -> Float64
+    adaptive_distance(state, base_distance, s_sim, s_obs) -> Float64
 
-Distance used for acceptance. When `state.adaptive === nothing` this is
-exactly `base_distance(s_sim, s_obs)` (non-adaptive runs are bit-identical to
-main). When adaptive state is present, both summaries are pre-scaled by the
-frozen inverse-distance weights (`state.adaptive.weights`,
-`state.adaptive.key_order`) before `base_distance` is applied — for an L2 base
-distance that is the adaptive weighted L2, and any other configured distance
-sees the same summary shape it always does.
+Distance used for acceptance. `base_distance` is any callable of two summaries
+(a function, a closure, or a callable struct such as `WeightedL2`). When
+`state.adaptive === nothing` this is exactly `base_distance(s_sim, s_obs)`
+(non-adaptive runs are bit-identical to main). When adaptive state is present,
+both summaries are pre-scaled by the frozen inverse-distance weights
+(`state.adaptive.weights`, `state.adaptive.key_order`) before `base_distance`
+is applied — for an L2 base distance that is the adaptive weighted L2, and any
+other configured distance sees the same summary shape it always does.
 """
-function adaptive_distance(state, base_distance::Function, s_sim, s_obs)
+function adaptive_distance(state, base_distance, s_sim, s_obs)
     ad = state.adaptive
     ad === nothing && return base_distance(s_sim, s_obs)
     return base_distance(apply_weights(s_sim, ad.weights, ad.key_order),
@@ -393,32 +415,37 @@ end# ── generation-boundary lifecycle ────────────�
 
 """
     update_adaptive!(state, config::AdaptiveDistanceConfig,
-                     base_distance::Function, summary_obs) -> state
+                     base_distance, summary_obs) -> state
 
-Generation-boundary adaptation, run *after* a generation completes and *before*
-the next one starts:
+Preparation boundary for the *next* generation, run immediately **before** that
+generation starts (never after the final requested generation):
 
-  1. estimate new inverse-distance weights from the completed generation's
-     accepted summaries and importance weights (`PreviousGenAccepted`),
-  2. recompute that generation's acceptance distances under the new weights,
-  3. store both in `state.adaptive` (weights + `epsilon_distances`) and freeze
-     `gen_estimated = state.gen`.
+  1. estimate new inverse-distance weights from the completed population
+     (`PreviousGenAccepted` — generation `state.gen` accepted summaries),
+  2. recompute that population's acceptance distances under the new weights,
+  3. freeze `weights`, `epsilon_selection_distances`, and
+     `gen_applied = state.gen + 1` — the generation the frozen state governs.
 
-`state.dists` — the acceptance distances computed with the weights that
-governed the completed generation — is deliberately **not** overwritten.
-Epsilon is not derived here; the schedule receives
-`state.adaptive.epsilon_distances` on its next call and the driver freezes the
-result in `state.adaptive.epsilon`.
+Epsilon is derived immediately afterwards by the driver (the schedule receives
+`state.adaptive.epsilon_selection_distances`) and frozen in
+`state.adaptive.epsilon`; generation `gen_applied` then runs with weights and
+epsilon that never change mid-generation. `state.dists` — acceptance distances
+of the completed generation — is deliberately **not** overwritten.
 
-If `state.adaptive === nothing`, the runtime state is attached lazily from
-`summary_obs` (key order) and `config.initializer` (unit weights), so a first
-call on a non-adaptive state activates adaptive mode.
+If `state.adaptive === nothing`, runtime state is attached lazily from
+`summary_obs` (key order) and `config.initializer` (unit weights) — unless the
+strategy is `NoAdaptation`, which normalizes to the ordinary non-adaptive path
+and allocates nothing.
 
 Throws `ArgumentError` on key mismatch (summaries vs `key_order`) and on
 non-finite summary values.
 """
 function update_adaptive!(state, config::AdaptiveDistanceConfig,
-                          base_distance::Function, summary_obs)
+                          base_distance, summary_obs)
+    # NoAdaptation normalizes to the ordinary non-adaptive path: no adaptive
+    # state is allocated, updated, or checkpointed.
+    config.strategy isa NoAdaptation && return state
+
     state.gen >= 1 || throw(ArgumentError(
         "update_adaptive! requires a completed generation (state.gen = $(state.gen))"))
 
@@ -429,8 +456,8 @@ function update_adaptive!(state, config::AdaptiveDistanceConfig,
         key_order = collect(Symbol, keys(summary_obs))
         state.adaptive = AdaptiveDistanceState(
             key_order,
-            _initial_weights(config.initializer, key_order),
-            state.gen,
+            _initial_weights(config.initializer, config.strategy, key_order),
+            max(state.gen, 1),
             Float64[],
             state.ε)
     end
@@ -464,14 +491,15 @@ function update_adaptive!(state, config::AdaptiveDistanceConfig,
         end
     end
 
-    # 1. Estimate new weights for the next generation (unweighted std for now).
+    # 1. Estimate weights for the upcoming generation from the completed
+    #    population (unweighted std for now).
     new_weights = estimate_weights(config.strategy, X, state.w, ad.key_order,
                                    config.policy)
     any(>(0), new_weights) || throw(ArgumentError(
         "all inverse-distance weights are zero (every key constant under " *
         "constant_policy = :ignore); the distance would degenerate"))
 
-    # 2. Recompute the completed generation's acceptance distances under the
+    # 2. Recompute the completed population's acceptance distances under the
     #    new weights — stored separately; `state.dists` is left untouched.
     recomputed = Vector{Float64}(undef, n)
     for i in 1:n
@@ -480,10 +508,10 @@ function update_adaptive!(state, config::AdaptiveDistanceConfig,
             apply_weights(summary_obs, new_weights, ad.key_order))
     end
 
-    # 3. Freeze the new weights for the next generation.
+    # 3. Freeze the state that will govern the upcoming generation.
     ad.weights = new_weights
-    ad.gen_estimated = state.gen
-    ad.epsilon_distances = recomputed
+    ad.gen_applied = state.gen + 1
+    ad.epsilon_selection_distances = recomputed
     return state
 end
 
