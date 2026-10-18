@@ -59,6 +59,48 @@ Private = false
 Filter = x -> occursin("FixedSchedule", string(x)) || occursin("QuantileSchedule", string(x)) || occursin("epsilon_quantile", string(x))
 ```
 
+## Adaptive distance scaling
+
+Per-key inverse-distance scaling for ABC-SMC summaries, enabled with the
+`adaptive` keyword of [`run_smc`](@ref) / [`run_smc!`](@ref). With the ordinary
+Euclidean base distance (p = 2), both summaries are pre-scaled by the inverse
+scale weights before their weighted Euclidean distance is evaluated:
+
+```julia
+adaptive = AdaptiveDistanceConfig(
+    StandardDeviationScale(),
+    NumericalPolicy(constant_policy = :clamp),
+)
+state = run_smc(cfg, s_obs; N = 1000, T = 10, adaptive = adaptive)
+```
+
+Numerical policy (`floor`, `constant_policy`, `max_weight`) lives only in
+[`NumericalPolicy`](@ref) — strategy types identify the estimator alone. The
+runtime state is internal: inspect it read-only through `state.adaptive`.
+
+This release is ABC-SMC-only. Estimated weights use the previous accepted
+population's unweighted standard deviation. Estimated strategies initialize
+with unit weights; `FixedScale` uses its explicit weights from generation 1.
+Immediately before every generation actually executed after the first, the
+implementation estimates that generation's weights, recomputes the preceding
+population's distances, derives epsilon, and freezes both weights and epsilon.
+It performs no update after the final requested generation.
+
+MAD scaling, importance-weighted scale estimation, rejected/all-particle scale
+estimation, selected update generations, prior-predictive initialization,
+weight-ratio bounds, and adaptive-distance integration with ABC-MCMC or ABC-PMC
+are deferred. This is not a claim of full pyABC parity.
+
+```@autodocs
+Modules = [SequentialABC]
+Order = [:type, :function]
+Private = false
+Filter = x -> any(n -> occursin(n, string(x)),
+                  ("AbstractScaleStrategy", "NoAdaptation", "FixedScale",
+                   "StandardDeviationScale", "PreviousGenAccepted", "UnitInit",
+                   "NumericalPolicy", "AdaptiveDistanceConfig"))
+```
+
 ## Sampler drivers
 
 ```@autodocs
