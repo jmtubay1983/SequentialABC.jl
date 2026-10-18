@@ -41,14 +41,14 @@ function save_checkpoint(state::ABCSMCState, dir::AbstractString)
             n_attempts = state.n_attempts,
             n_resamples = state.n_resamples)
 
-    # Adaptive state is checkpointed when present so a resumed run can
-    # continue with identical weights and epsilon-distances.
+    # Adaptive runtime state is checkpointed when present so a resumed run can
+    # continue with identical weights, key order, epsilon-selection distances
+    # and epsilon. The immutable configuration is NOT serialized — the caller
+    # re-supplies it when resuming.
     if state.adaptive !== nothing
         ad = state.adaptive
         data = merge(data, (adaptive = (
-            strategy = ad.strategy,
             key_order = ad.key_order,
-            policy = ad.policy,
             weights = ad.weights,
             gen_estimated = ad.gen_estimated,
             epsilon_distances = ad.epsilon_distances,
@@ -109,13 +109,12 @@ function load_checkpoint(path::AbstractString, cfg)
         data.ess, data.base_seed, data.n_attempts, data.n_resamples, nothing
     )
 
-    # Restore adaptive state if present (schema_version >= 1).
+    # Restore adaptive runtime state if present (schema_version >= 1). The
+    # immutable config is re-supplied by the caller via run_smc!(...; adaptive=).
     if schema_version >= 1 && haskey(data, :adaptive)
         ad = data.adaptive
         state.adaptive = AdaptiveDistanceState(
-            ad.strategy,
             ad.key_order,
-            ad.policy,
             ad.weights,
             ad.gen_estimated,
             ad.epsilon_distances,
