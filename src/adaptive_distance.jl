@@ -58,8 +58,8 @@ end
     FixedScale(weights::AbstractVector{<:Real}) <: AbstractScaleStrategy
 
 User-supplied per-key inverse-distance weights. `weights` is validated once at
-construction (non-empty, finite, at least one positive entry) and is applied
-in the stable summary key order owned by the runtime state.
+construction (non-empty, finite, strictly positive) and is applied in the
+stable summary key order owned by the runtime state.
 """
 struct FixedScale <: AbstractScaleStrategy
     weights::Vector{Float64}
@@ -67,8 +67,8 @@ struct FixedScale <: AbstractScaleStrategy
         w = Float64.(weights)
         isempty(w) && throw(ArgumentError("FixedScale weights must not be empty"))
         all(isfinite, w) || throw(ArgumentError("FixedScale weights must be finite"))
-        any(>(0), w) || throw(ArgumentError(
-            "FixedScale weights must have at least one positive entry"))
+        all(>(0), w) || throw(ArgumentError(
+            "FixedScale weights must be strictly positive, got $w"))
         return new(w)
     end
 end
