@@ -34,6 +34,7 @@ include("distances/Distances.jl")
 include("recipes/Recipes.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
+include("evaluation.jl")
 
 """
     run_inference(engine::Symbol, cfg, s_obs; kwargs...)
@@ -175,6 +176,19 @@ export ABCSimulator,
        make_mahalanobis,
        default_schedule,
        default_kernel_scaling,
+       EvaluationContext,
+       EvaluationResult,
+       EvaluationFailure,
+       FailurePolicy,
+       RejectEvaluation,
+       RetryEvaluation,
+       AbortInference,
+       FunctionFailurePolicy,
+       evaluation_seed,
+       EVALUATION_SEED_SCHEMA_VERSION,
+       context_primitive,
+       retry_with_limit,
+       evaluate,
        preset_summaries
 
 end
