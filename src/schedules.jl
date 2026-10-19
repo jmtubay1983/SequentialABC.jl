@@ -4,11 +4,22 @@
 
 Adaptive tolerance: the `q`-quantile of the supplied accepted distances.
 
-Monotone non-increasing **by construction**: every stored distance is ≤ the
-tolerance that accepted it, so any quantile of them is ≤ `ε_cap`. An explicit
-`min` guard is kept as belt-and-braces.
-
 Typical choice q = 0.5 (median), used to define ε_{t+1} from population t.
+
+# Monotonicity and the `ε_cap` guard
+
+The monotonicity story depends on the distance source:
+
+- **Non-adaptive mode** (`state.dists`): monotone non-increasing by
+  construction — every stored distance is ≤ the tolerance that accepted it,
+  so any quantile of them is ≤ the previous ε.
+- **Adaptive mode** (`state.adaptive.epsilon_selection_distances`): the
+  vector is *recomputed* at the generation boundary under the newly
+  estimated weights. Recomputed distances are **not** bounded by the
+  previous tolerance, so monotonicity does not follow from construction
+  alone — the explicit `min(ε_new, ε_cap)` guard is load-bearing there
+  (it is what keeps ε from growing past the caller's cap), not merely
+  belt-and-braces. It remains belt-and-braces in non-adaptive mode.
 
 # Distance source
 
