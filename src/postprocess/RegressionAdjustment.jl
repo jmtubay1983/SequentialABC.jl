@@ -342,7 +342,11 @@ end
 function _replace_samples(result::ABCSMCState, θadj::AbstractMatrix{Float64})
     θnew = [θadj[i, :] for i in 1:size(θadj, 1)]
     # Plain state: the adjusted samples carry no adaptive runtime state
-    # (postprocess integration with adaptive runs is deferred).
+    # (postprocess integration with adaptive runs is deferred). Post-processing
+    # an adaptive run currently drops `adaptive = nothing` — the caller should
+    # interpret adjusted results in the non-adaptive sense and should not expect
+    # the original adaptive distance state to carry over to subsequent adjusted
+    # inference steps.
     return ABCSMCState(result.cfg, θnew, result.w, result.summaries, result.dists,
                        result.ε, result.gen, result.ess, result.base_seed,
                        result.n_attempts, result.n_resamples, nothing)

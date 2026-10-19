@@ -704,21 +704,67 @@ end
         dir, "schema3.jls", merge((schema_version = 3,), base))
     malformed_version = write_checkpoint_payload(
         dir, "schema-string.jls", merge((schema_version = "2",), base))
-    malformed_weights = write_checkpoint_payload(
-        dir, "schema2-bad-weights.jls",
+    # malformed_weight_type
+    mw_t = write_checkpoint_payload(
+        dir, "mw-t.jls",
         merge((schema_version = 2,), base,
               (adaptive = merge(adaptive_block, (weights = "bad",)),)))
-    inconsistent_lengths = write_checkpoint_payload(
-        dir, "schema2-bad-length.jls",
+    @test_throws ArgumentError load_checkpoint(mw_t, cfg_2key)
+    # inconsistent lengths
+    mw_l = write_checkpoint_payload(
+        dir, "mw-l.jls",
         merge((schema_version = 2,), base,
               (adaptive = merge(adaptive_block, (weights = [1.0],)),)))
+    @test_throws ArgumentError load_checkpoint(mw_l, cfg_2key)
+    # missing field
+    m_missing = write_checkpoint_payload(
+        dir, "m-missing.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = (key_order = [:a,:b], weights = [1.0,1.0],
+                           epsilon_selection_distances = Float64[], epsilon = state.ε),)))
+    @test_throws ArgumentError load_checkpoint(m_missing, cfg_2key)
+    # bad gen_applied
+    m_badgen = write_checkpoint_payload(
+        dir, "m-badgen.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (gen_applied = 5,)),)))
+    @test_throws ArgumentError load_checkpoint(m_badgen, cfg_2key)
+    # bad distances length (poplen N)
+    m_badlen = write_checkpoint_payload(
+        dir, "m-badlen.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (epsilon_selection_distances = [0.1],)),)))
+    @test_throws ArgumentError load_checkpoint(m_badlen, cfg_2key)
+    # bad epsilon (nonfinite/neg)
+    m_bad_eps = write_checkpoint_payload(
+        dir, "m-badeps.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (epsilon = NaN,)),)))
+    @test_throws ArgumentError load_checkpoint(m_bad_eps, cfg_2key)
+    m_bad_eps2 = write_checkpoint_payload(
+        dir, "m-badeps2.jls",
+        merge((schema_version = 2,), base,
+              (adaptive = merge(adaptive_block, (epsilon = -1.0,)),)))
+    @test_throws ArgumentError load_checkpoint(m_bad_eps2, cfg_2key)
+    # schema0_adaptive / schema1_adaptive / schema2_plain
+    schema0_adaptive = write_checkpoint_payload(
+        dir, "schema0-adaptive.jls", merge(base, (adaptive = adaptive_block,)))
+    schema1_adaptive = write_checkpoint_payload(
+        dir, "schema1-adaptive.jls",
+        merge((schema_version = 1,), base, (adaptive = adaptive_block,)))
+    schema2_plain = write_checkpoint_payload(
+        dir, "schema2-plain.jls", merge((schema_version = 2,), base))
+    future_schema = write_checkpoint_payload(
+        dir, "schema3.jls", merge((schema_version = 3,), base))
+    malformed_version = write_checkpoint_payload(
+        dir, "schema-string.jls", merge((schema_version = "2",), base))
     @test_throws ArgumentError load_checkpoint(schema0_adaptive, cfg_2key)
     @test_throws ArgumentError load_checkpoint(schema1_adaptive, cfg_2key)
     @test_throws ArgumentError load_checkpoint(schema2_plain, cfg_2key)
     @test_throws ArgumentError load_checkpoint(future_schema, cfg_2key)
     @test_throws ArgumentError load_checkpoint(malformed_version, cfg_2key)
-    @test_throws ArgumentError load_checkpoint(malformed_weights, cfg_2key)
-    @test_throws ArgumentError load_checkpoint(inconsistent_lengths, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(mw_t, cfg_2key)
+    @test_throws ArgumentError load_checkpoint(mw_l, cfg_2key)
 end
 
 # ── Scalar summary tests ─────────────────────────────────────────────────────

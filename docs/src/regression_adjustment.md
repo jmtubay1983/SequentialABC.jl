@@ -67,6 +67,12 @@ Both accept optional importance weights `w` and return an `N × d`
 instead returns a [`RegressionAdjustment`](@ref) that also exposes the fitted
 slopes and the bandwidth actually used.
 
+**Note on adaptive runs:** `adjusted_posterior(state::ABCSMCState, ...)`
+currently replaces the result's adaptive runtime state with `nothing`
+(postprocess integration with adaptive runs is deferred). When the original
+`state.adaptive` is present, callers should treat the returned result as
+non-adaptive and should not expect the adaptive state to be preserved.
+
 ## Example
 
 A runnable demonstration lives in `examples/regression_adjustment.jl`:

@@ -134,6 +134,39 @@ Fields:
     `max_weight`)
   - `max_weight` — the weight used by `constant_policy === :clamp`
 
+# Scale paths in detail (`StandardDeviationScale`)
+
+For each key the estimator computes the *unweighted* standard deviation
+`scale` of the accepted replicate summaries and then takes exactly one of
+three paths:
+
+1. **Regular path** — `scale` finite and strictly positive: the weight is
+   `1 / max(scale, floor)`.
+   - A *near-zero* scale below `floor` (floating-point rounding on a
+     nominally constant key, tiny but nonzero variance) takes this path
+     with `max(scale, floor) == floor`, receiving weight `1/floor`
+     (default `1e-8` → `1e8`). Note that this floor-derived weight
+     **exceeds `max_weight`** (default `1e6`): `max_weight` is not an
+     upper bound on all weights — it is only the value used by the
+     `:clamp` branch of path 2. Raise `floor` (or use
+     `constant_policy = :clamp` on a detected constant key) if you need a
+     tighter bound; pass `floor ≥ 1/max_weight` to keep `1/floor ≤ max_weight`.
+2. **Constant/degenerate path** — `scale == 0.0` or non-finite (`NaN` or
+   `±Inf`): `constant_policy` decides — `:error` throws `ArgumentError`
+   naming the key, `:ignore` stores weight `0.0`, `:clamp` stores exactly
+   `max_weight`.
+3. `:ignore` weights are re-validated afterwards: if *every* key took path 2
+   with `:ignore`, the all-zero weight vector would degenerate every
+   distance to zero and is rejected with `ArgumentError`.
+
+**N = 1.** With a single particle the sample standard deviation of one value
+is `NaN` (the corrected estimator is undefined for `n = 1`), so every key
+takes path 2 as non-finite. Under the default `constant_policy = :error`
+the run fails closed at the *first* adaptive boundary — the `update_adaptive!`
+call before generation 2 — with an `ArgumentError`; it does not silently
+produce weights. Choose `:clamp` or `:ignore` (or a non-estimated strategy
+such as `FixedScale`) to run populations smaller than 2 deliberately.
+
 Belongs to [`AdaptiveDistanceConfig`](@ref), never to strategy types.
 """
 struct NumericalPolicy
@@ -405,13 +438,36 @@ both summaries are pre-scaled by the frozen inverse-distance weights
 (`state.adaptive.weights`, `state.adaptive.key_order`) before `base_distance`
 is applied — for an L2 base distance that is the adaptive weighted L2, and any
 other configured distance sees the same summary shape it always does.
+
+# Composition with weighted base distances
+
+Adaptive scaling pre-scales *both* summaries before the configured base
+distance runs, so a base distance that already carries its own per-key
+weights — [`weighted_l2`](@ref), a `WeightedL2` instance, or a Mahalanobis
+distance via [`make_mahalanobis`](@ref) — **composes** with the adaptive
+weights: the effective per-key factor is the *product* of the base
+distance's weight and the adaptive inverse-scale weight (for Mahalanobis,
+the adaptive diagonal scales also enter the matrix form through the
+pre-scaled summaries). This double weighting is intentional and
+user-controlled: it is your configured metric combined with the adaptive
+scaling you enabled. To use exactly one of the two, either pick a plain
+base distance (Euclidean) and let `AdaptiveDistanceConfig` supply the
+weights, or keep the weighted base distance and use
+`AdaptiveDistanceConfig(NoAdaptation())` (which normalizes to the ordinary
+non-adaptive path).
+
+Adaptive scaling never changes particle weights: it only changes the
+distance an acceptance decision is based on; importance weights, resampling
+and the ESS follow the same code paths as a non-adaptive run.
 """
 function adaptive_distance(state, base_distance, s_sim, s_obs)
     ad = state.adaptive
     ad === nothing && return base_distance(s_sim, s_obs)
     return base_distance(apply_weights(s_sim, ad.weights, ad.key_order),
                          apply_weights(s_obs, ad.weights, ad.key_order))
-end# ── generation-boundary lifecycle ────────────────────────────────────────────
+end
+
+# ── generation-boundary lifecycle ────────────────────────────────────────────
 
 """
     update_adaptive!(state, config::AdaptiveDistanceConfig,
