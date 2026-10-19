@@ -44,9 +44,13 @@ comes back unwrapped — a named forwarder, not a new API level:
 
 | `engine` | calls | result | keywords |
 |---|---|---|---|
-| `:smc`  | [`run_smc`](@ref)  | [`ABCSMCState`](@ref) | `N`, `T`, `schedule`, `ε0`, `M`, `base_seed`, `checkpoint_dir` |
+| `:smc`  | [`run_smc`](@ref)  | [`ABCSMCState`](@ref) | `N`, `T`, `schedule`, `ε0`, `M`, `base_seed`, `adaptive`, `checkpoint_dir` |
 | `:mcmc` | [`run_mcmc`](@ref) | [`ABCMCMCChain`](@ref) | `n_samples`, `ε`, `thin`, `M`, `base_seed` |
 | `:pmc`  | [`run_pmc`](@ref)  | [`ABCSMCState`](@ref) | `N`, `T`, `εs`, `schedule`, `kernel_rule`, `M`, `base_seed` |
+
+The `adaptive` keyword (an [`AdaptiveDistanceConfig`](@ref) for adaptive
+distance scaling) is forwarded by `:smc` exactly like any other keyword;
+`:mcmc` and `:pmc` do not accept it in this release.
 
 ```julia
 state = run_inference(:smc,  cfg, s_obs; N = 1000, T = 5, base_seed = 2026)

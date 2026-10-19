@@ -197,7 +197,10 @@ Built-in schedules:
 
 - `FixedSchedule` — ignores `distances`, returns `εs[t]`.
 - `QuantileSchedule` — uses `distances` (non‑adaptive: `state.dists`;
-  adaptive: `state.adaptive.epsilon_selection_distances`).
+  adaptive: `state.adaptive.epsilon_selection_distances`). For adaptive
+  mode, the recomputed distances are not bounded by the previous tolerance,
+  so the `min(ε_new, ε_cap)` guard in [`epsilon_quantile`](@ref) is
+  load-bearing, not just belt-and-braces.
 
 Required adaptive lifecycle — preparation runs *before* each upcoming
 generation and stops after the final requested one:
@@ -221,8 +224,11 @@ generation `gen_applied == T` — never a prepared-but-unrun next generation.
 
 Resuming a checkpointed adaptive run re-supplies the same `adaptive` config;
 the runtime state itself (key order, weights, distances, ε) comes from the
-checkpoint. `AdaptiveDistanceConfig(NoAdaptation())` normalizes to the
+checkpoint. Attempting to resume a state that carries adaptive runtime state
+without passing `adaptive` throws `ArgumentError` (the error path is enforced
+in `run_smc!`). `AdaptiveDistanceConfig(NoAdaptation())` normalizes to the
 ordinary non-adaptive path — no adaptive state is allocated or checkpointed.
+
 
 If `checkpoint_dir` is given, an atomic checkpoint is written after
 initialization and after every completed generation (`state_gen_XXX.jls`).
@@ -306,11 +312,16 @@ function schedule_epsilon(schedule, state::ABCSMCState, t::Int,
 end
 
 # Mean of M replicate summaries. M = 1 returns the sole replicate unchanged
-# (the historical path for every summary type). For M > 1 scalars and vectors
-# keep the historical `reduce(+, sims) / M` path bit-for-bit. NamedTuple
-# summaries — required to route adaptive distance scaling through
-# run_generation! — are averaged key-wise for M > 1, with explicit errors for
-# mismatched keys and non-numeric values.
+# (the historical path for every summary type). Type/identity edge cases at
+# M = 1: the *identical object* is returned (`===`), so vectors are not copied;
+# integer-valued summaries keep their `Int` element type instead of being
+# `/`-promoted to `Float64` as the averaged path does; and NamedTuple summaries
+# — required to route adaptive distance scaling through run_generation! — are
+# returned as-is (they previously hit a `MethodError` from the averaging path
+# at M = 1 and could not be used at all). For M > 1 scalars and vectors keep
+# the historical `reduce(+, sims) / M` path bit-for-bit. NamedTuple summaries
+# are averaged key-wise for M > 1, with explicit errors for mismatched keys
+# and non-numeric values.
 function mean_summary(sims, M::Int)
     s1 = first(sims)
     M == 1 && return s1
@@ -354,13 +365,20 @@ Keywords:
   - `T::Int`      — total generations, *including* generation 1
   - `schedule`    — callable `(state, t) -> ε_t`; only generations `t ≥ 2` consult
     it. See [`QuantileSchedule`](@ref) and [`FixedSchedule`](@ref); any function of
-    `(state, t)` works
+    `(state, t)` works. For adaptive mode, the schedule receives
+    `state.adaptive.epsilon_selection_distances` (not `state.dists`) — see
+    [`QuantileSchedule`](@ref) for monotonicity notes (the `ε_cap`/`min` guard
+    is load-bearing when distances are recomputed under new weights).
   - `ε0`          — tolerance used to accept generation 1. The default `Inf`
     accepts the first prior draw for every particle, so generation 1 *is* a plain
     prior sample and the schedule sets the real tolerance from generation 2 on;
     the state then keeps `ε = Inf` if `T == 1`. Pass a finite value to start from
     a tighter, pre‑filtered set instead
-  - `M::Int`      — simulator replicates per particle (summaries are averaged)
+  - `M::Int`      — simulator replicates per particle (summaries are averaged).
+    `M = 1` skips averaging entirely: the sole replicate is used unchanged —
+    the identical object, with integer-valued summaries staying `Int` and
+    NamedTuple summaries accepted as-is (see the internal `mean_summary`
+    source comment for the full type/identity contract)
   - `base_seed`   — base seed; the same arguments replay an identical run
   - `Tθ`          — parameter type returned by `cfg.sample_prior`. `nothing`
     (default) infers it by drawing one prior sample with a throwaway RNG and
@@ -369,7 +387,10 @@ Keywords:
   - `adaptive`      — an [`AdaptiveDistanceConfig`](@ref) enabling adaptive
     inverse‑distance scaling (estimator, initializer, numerical policy);
     `nothing` (default) keeps the plain distance. `NoAdaptation` inside a
-    config normalizes to the plain, non-adaptive path
+    config normalizes to the plain, non-adaptive path. The configuration is
+    immutable and must be re-supplied when resuming a checkpointed adaptive run;
+    attempting to resume an adaptive state without `adaptive` throws
+    `ArgumentError` (see `run_smc!`).
   - `checkpoint_dir` — if given, an atomic checkpoint is written after generation 1
     and after every completed generation. Resume with [`load_latest_state`](@ref)
     plus [`run_smc!`](@ref) — calling `run_smc` again would restart from scratch

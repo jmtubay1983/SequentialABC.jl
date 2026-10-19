@@ -117,9 +117,12 @@ resume without adaptive state; that is unsupported and not claimed here.
 """
 function load_checkpoint(path::AbstractString, cfg)
     data = open(deserialize, path)
+    if !(data isa NamedTuple)
+        throw(ArgumentError(
+            "checkpoint $path is malformed: payload must be a NamedTuple (got $(typeof(data)))"))
+    end
     Tθ   = eltype(data.θ)          # struct parameters hold ELEMENT types (fields are Vector{Tθ})
     Tsum = eltype(data.summaries)
-
     # Detect schema version; legacy (pre‑adaptive) checkpoints carry no tag.
     schema_version = get(data, :schema_version, CHECKPOINT_SCHEMA_LEGACY)
     schema_version isa Int || throw(ArgumentError(
@@ -151,13 +154,13 @@ function load_checkpoint(path::AbstractString, cfg)
     # Restore the adaptive runtime state (schema 2). The immutable config is
     # re-supplied by the caller via run_smc!(...; adaptive = ...).
     if has_adaptive
-        state.adaptive = _restore_adaptive_checkpoint(data.adaptive, path)
+        state.adaptive = _restore_adaptive_checkpoint(data.adaptive, path, data.gen, length(data.dists))
     end
 
     return state
 end
 
-function _restore_adaptive_checkpoint(ad, path::AbstractString)
+function _restore_adaptive_checkpoint(ad, path::AbstractString, state_gen::Int, n_particles::Int)
     ad isa NamedTuple || throw(ArgumentError(
         "checkpoint $path has a malformed :adaptive block of type " *
         "$(typeof(ad)); expected a NamedTuple"))
@@ -177,13 +180,24 @@ function _restore_adaptive_checkpoint(ad, path::AbstractString)
             "checkpoint $path adaptive weights must be a vector of Real"))
     ad.gen_applied isa Int || throw(ArgumentError(
         "checkpoint $path adaptive gen_applied must be an Int"))
+    if !(1 <= ad.gen_applied <= state_gen)
+        throw(ArgumentError(
+            "checkpoint $path adaptive gen_applied $(ad.gen_applied) must be in " *
+            "[1, state.gen = $state_gen]"))
+    end
     distances = ad.epsilon_selection_distances
     distances isa AbstractVector && all(x -> x isa Real, distances) ||
         throw(ArgumentError(
             "checkpoint $path adaptive epsilon_selection_distances must be " *
             "a vector of Real"))
-    ad.epsilon isa Real || throw(ArgumentError(
-        "checkpoint $path adaptive epsilon must be Real"))
+    length(distances) == n_particles || throw(ArgumentError(
+        "checkpoint $path adaptive epsilon_selection_distances length " *
+        "$(length(distances)) does not match particle population length " *
+        "$n_particles"))
+    ad.epsilon isa Real && isfinite(ad.epsilon) || throw(ArgumentError(
+        "checkpoint $path adaptive epsilon must be finite Real; got $(ad.epsilon)"))
+    ad.epsilon >= 0 || throw(ArgumentError(
+        "checkpoint $path adaptive epsilon must be >= 0, got $(ad.epsilon)"))
 
     return AdaptiveDistanceState(
         collect(Symbol, key_order), weights, ad.gen_applied, distances,
