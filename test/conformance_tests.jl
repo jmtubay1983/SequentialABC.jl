@@ -248,7 +248,7 @@ end
 
     # Run production ABC-SMC with a prespecified schedule and budget.
     # Generation 1 uses eps0 = Inf (prior); generations 2..T use the schedule.
-    state = run_smc(cfg_gauss, S_OBS_1D; N=200, T=3, ε0=Inf,
+    state = run_smc(cfg_gauss, S_OBS_1D; N=500, T=3, ε0=Inf,
                     base_seed=base_seed,
                     schedule=FixedSchedule([1.0, final_eps, final_eps]))
 
