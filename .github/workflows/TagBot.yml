@@ -1,0 +1,17 @@
+name: TagBot
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  tagbot:
+    if: github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: JuliaRegistrator/TagBot@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
