@@ -230,7 +230,7 @@ function run_mcmc(cfg::ABCSMCConfig, summary_obs;
     # gen = 1 marks "one ABC population"; n_attempts is reused as the simulation
     # count and n_resamples stays 0 — all three are diagnostics only.
     state = ABCSMCState(cfg, samples, w, summaries, dists, ε, 1, Float64(N),
-                        base_seed, n_sim, 0)
+                        base_seed, n_sim, 0, nothing)
     return ABCMCMCChain(state, collect(accepted), ε, Matrix{Float64}(cfg.Σ),
                         base_seed, n_sim)
 end
