@@ -79,7 +79,6 @@ function run_gate1()
     capability_gap!(r, "ancestry")
     capability_gap!(r, "cache of retained particles")
     capability_gap!(r, "mid-generation checkpointing")
-    capability_gap!(r, "version-stable seed derivation (schema version)")
 
     return r
 end

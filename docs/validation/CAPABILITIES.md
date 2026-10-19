@@ -53,7 +53,7 @@ Symbol counts in `src/` (`grep -RIc --include='*.jl'`):
 | # | Capability | Status | Evidence (file:line) |
 |---:|---|---|---|
 | 1 | Canonical simulator callback | **present** | `src/simulator.jl:1` (`abstract type ABCSimulator`), `src/simulator.jl:13` (`AgentsSimulator`), `src/simulator.jl:27` (`ContinuousSimulator`), `src/simulator.jl:33` and `:41` (`run_sim_once` dispatch) |
-| 2 | Seed derivation | **present** | `src/rng.jl:13` (`make_particle_seed(gen, i, attempt, m, base)`), pure `hash` of the coordinate tuple — deterministic, no global RNG |
+| 2 | Seed derivation | **present** | `src/rng.jl:13` (`make_particle_seed(gen, i, attempt, m, base)`), SplitMix64-style mixing of the coordinate tuple with `SEED_SCHEMA_VERSION` — deterministic, no global RNG, cross-version stable |
 | 3 | Per-replicate seeds | **partial** | The *derivation* exists (`src/rng.jl:26`–`:30`, role indices at `src/smc.jl:35`/`:116`/`:120`/`:158`) but there is no `EvaluationContext` exposing `replicate_seeds` to a callback (rows above are 0 hits). A downstream adapter cannot read replicate seeds out of a production context object today. |
 | 4 | Checkpoint write / read / restart | **present** | `src/checkpoint.jl:22` (`save_checkpoint`), `src/checkpoint.jl:69` (`load_checkpoint`), `src/checkpoint.jl:88` (`load_latest_state`), `src/checkpoint.jl:51` (`list_checkpoints`) |
 | 5 | Importance weights | **present** | `src/weights.jl:17` (`importance_weight`, log-space), `src/weights.jl:37` (`ess`), `src/weights.jl:56` (`systematic_resample`) |
@@ -65,11 +65,11 @@ Symbol counts in `src/` (`grep -RIc --include='*.jl'`):
 | 11 | Threaded execution | **partial** | `grep -RIn 'Threads\|@spawn\|@threads' src` → no matches; no internal parallelism, but every RNG is locally constructed (`src/rng.jl:30`) so the engine is deterministic under an externally spawned `Threads.@spawn` task — verified end-to-end by gate 3 |
 | 12 | Simulator-failure propagation | **present** | `grep -RIn 'try\|catch' src/smc.jl src/rng.jl src/checkpoint.jl src/weights.jl src/state.jl src/simulator.jl src/config.jl` → no matches, so a simulator exception escapes `run_sim_once` (`src/simulator.jl:33`/`:41`) uncaught through `run_generation!` (`src/smc.jl:95`); verified end-to-end by gate 3 |
 | 13 | Simulation budget cap | **partial** | per-particle attempt cap only: `max_attempts::Int=10_000` at `src/smc.jl:6`, `:21`, `:74`, `:95`, `:186`, `:198`, `:263`, raising at `src/smc.jl:56`/`:144`; grep `max_simulations`, `sim_budget` = 0 hits — there is no global cap across generations |
-| 14 | Version-stable seed derivation | **partial** | `src/rng.jl:13` uses Julia `hash()` which is **not guaranteed stable across Julia versions**; checkpoints and replays cannot be versioned without an explicit schema-versioned mixing function |
+| 14 | Version-stable seed derivation | **present** | `src/rng.jl:13` uses SplitMix64 finalizer mixing with `SEED_SCHEMA_VERSION = 0x0000000000000001` (`src/rng.jl:4`). Checkpoints store `seed_schema_version` (`src/checkpoint.jl:36`) and `load_checkpoint` rejects mismatched versions (`src/checkpoint.jl:69-82`) |
 
 ## Consequences for the gates
 
-- Rows 6, 7, 8, 9, 10, 13 and 14 cannot be exercised against production code. The gates
+- Rows 6, 7, 8, 9, 10 and 13 cannot be exercised against production code. The gates
   record `CAPABILITY_NOT_IMPLEMENTED: <name>` for each instead of asserting a
   test-local stand-in, so the report cannot claim coverage that the engine does not
   provide. Threaded execution (row 11) is exercised empirically by gate 3 even though no

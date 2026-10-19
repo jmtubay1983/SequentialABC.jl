@@ -152,6 +152,10 @@ Private = false
 Filter = x -> occursin("make_particle_seed", string(x))
 ```
 
+```@docs
+SEED_SCHEMA_VERSION
+```
+
 ## Checkpointing
 
 ```@autodocs
