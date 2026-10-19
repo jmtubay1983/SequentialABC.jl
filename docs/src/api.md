@@ -176,6 +176,29 @@ Private = false
 Filter = x -> occursin("make_particle_seed", string(x))
 ```
 
+## Simulator evaluation contracts
+
+The additive evaluation contract is described in the
+[Evaluation contracts](evaluation.md) page. It does not replace
+`make_particle_seed` and is not yet consumed by the SMC, PMC, or ABC-MCMC
+engines.
+
+```@docs
+EvaluationContext
+EvaluationResult
+EvaluationFailure
+FailurePolicy
+RejectEvaluation
+RetryEvaluation
+AbortInference
+FunctionFailurePolicy
+evaluation_seed
+EVALUATION_SEED_SCHEMA_VERSION
+context_primitive
+retry_with_limit
+evaluate
+```
+
 ## Checkpointing
 
 ```@autodocs
