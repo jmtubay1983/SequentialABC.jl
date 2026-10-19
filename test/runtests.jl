@@ -9,6 +9,7 @@ using Test
     include("test_resampling.jl")
     include("test_checkpoint.jl")
     include("test_smc.jl")
+    include("adaptive_distance_tests.jl")
     include("run_smc_tests.jl")
     include("mcmc_tests.jl")
     include("pmc_tests.jl")
