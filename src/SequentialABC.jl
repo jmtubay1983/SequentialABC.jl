@@ -2,6 +2,7 @@ module SequentialABC
 
 using LinearAlgebra
 using Random
+using Dates
 using Distributions
 using StatsBase
 using Statistics
@@ -35,6 +36,9 @@ include("recipes/Recipes.jl")
 include("postprocess/RegressionAdjustment.jl")
 include("plotting/PlotsAPI.jl")
 include("evaluation.jl")
+# Run-history records and the in-memory reference store come last: they use
+# the evaluation contracts and add nothing to the inference engines.
+include("runstore.jl")
 
 """
     run_inference(engine::Symbol, cfg, s_obs; kwargs...)
@@ -189,6 +193,70 @@ export ABCSimulator,
        context_primitive,
        retry_with_limit,
        evaluate,
-       preset_summaries
+       preset_summaries,
+       # Run-history records and the in-memory reference store.
+       AbstractRunStore,
+       MemoryRunStore,
+       RunMetadata,
+       current_run_metadata,
+       RUNSTORE_SCHEMA_NAME,
+       RUNSTORE_SCHEMA_VERSION,
+       RUNSTORE_WEIGHT_SUM_TOLERANCE,
+       RUNSTORE_ESS_TOLERANCE,
+       RecordedValue,
+       RecordedNull,
+       RecordedBool,
+       RecordedInt,
+       RecordedUInt,
+       RecordedFloat,
+       RecordedString,
+       RecordedSymbol,
+       RecordedVector,
+       RecordedTuple,
+       RecordedNamedTuple,
+       RecordedOmitted,
+       RecordedSentinel,
+       RECORDED_SENTINEL_KINDS,
+       RecordedProvenance,
+       recorded_value,
+       recorded_provenance,
+       SummaryCapture,
+       recorded_summary,
+       omitted_summary,
+       not_applicable_summary,
+       EvaluationKey,
+       EvaluationRecord,
+       PopulationRecord,
+       AdaptiveDiagnostics,
+       check_acceptance_consistency,
+       GenerationCompletion,
+       StoreValidationReport,
+       initialize_run!,
+       open_run,
+       write_population!,
+       write_evaluation!,
+       finalize_generation!,
+       read_population,
+       read_evaluations,
+       latest_generation,
+       generations,
+       run_metadata,
+       schema_version,
+       validate_store,
+       RunStoreError,
+       UnsupportedRecordedValue,
+       NonfiniteRecordedValue,
+       UnsupportedSchemaVersion,
+       ConflictingRunMetadata,
+       InvalidRunStoreRecord,
+       DuplicatePopulation,
+       DuplicateEvaluation,
+       GenerationAlreadyComplete,
+       MissingGeneration,
+       GenerationGap,
+       MissingPopulation,
+       MissingExpectedEvaluation,
+       UnexpectedEvaluation,
+       MethodMismatch
 
 end
