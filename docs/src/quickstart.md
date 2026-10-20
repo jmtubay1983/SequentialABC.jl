@@ -131,4 +131,4 @@ The full Schelling segregation example is in `examples/agents_schelling.jl`. It 
 - **No global RNG**: Every random draw uses an explicitly constructed `MersenneTwister`.
 - **Deterministic seeds**: `make_particle_seed(gen, i, attempt, role, base_seed)` ensures full replay.
 - **Raw parameter space**: Particles are stored where the prior is defined; the transform is applied only at simulation time.
-- **Atomic checkpoints**: Written to `.tmp` then renamed — never corrupt, even if killed mid-write.
+- **Checkpoints**: Written to `.tmp` then renamed, so a kill before the rename leaves the last checkpoint intact (a stale `.tmp` is ignored by the loader). The file is native to the Julia version that wrote it and carries no checksum — a damaged checkpoint is detected when it fails to load.

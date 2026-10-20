@@ -422,3 +422,10 @@ The native store records history. It holds no configuration, no RNG state,
 and no executable sampler state, and it exposes no operation that
 reconstructs a sampler. Exact restart remains the job of
 [`save_checkpoint`](@ref) and [`load_latest_state`](@ref).
+
+The two mechanisms have different guarantees, and neither replaces the other:
+a checkpoint is the exact sampler-restart authority, while the store adds
+digests, manifests, and completion markers to the *history*. The store does
+not make a checkpoint verifiable, and a checkpoint does not record the run's
+history. See [Checkpoint guarantees](design.md#6-checkpoint-guarantees) for the
+side-by-side comparison.

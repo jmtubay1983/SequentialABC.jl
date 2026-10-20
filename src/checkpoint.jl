@@ -17,12 +17,17 @@ _checkpoint_name(gen::Int) = "state_gen_" * lpad(string(gen), 3, '0') * ".jls"
 """
     save_checkpoint(state::ABCSMCState, dir::AbstractString) -> String
 
-Atomically checkpoint the sampler to `dir/state_gen_XXX.jls`.
+Write the sampler state to `dir/state_gen_XXX.jls` with a temporary file and
+a rename.
 
 Only **data** is serialized (θ, w, summaries, ε, gen, ess, seeds, counters,
-plus adaptive state when present) — never `cfg` and its closures. This makes
-checkpoints portable across Julia versions, code revisions, and Slurm nodes:
-reload with the same (or updated) `cfg` via `load_latest_state`.
+plus adaptive state when present) — never `cfg` and its closures. The
+configuration is therefore reattached by the caller: reload with a compatible
+`cfg` via `load_latest_state`. The stored data itself is written with Julia's
+`Serialization`, so the file is native to the Julia version that wrote it and
+to the types it holds. It is not a version-independent or cross-language
+format, and a checkpoint written before a change to the particle or summary
+types has to be migrated explicitly.
 
 A `schema_version` tag is written with every checkpoint: `1` for non-adaptive
 payloads, `2` for adaptive payloads (see [`load_checkpoint`](@ref) for the
@@ -31,10 +36,17 @@ and schema-2 checkpoints; old code cannot read schema-2 adaptive checkpoints
 (unsupported — it ignores the tag and would silently resume without the
 adaptive state).
 
-Atomicity: the payload is written to a `.tmp` file first and then renamed.
-POSIX rename is atomic on the same filesystem, so a job killed mid‑write can
-never leave a corrupted checkpoint — at worst a stale `.tmp` file, which the
-loader ignores.
+Write protocol: the payload is written to a `.tmp` file first and then renamed
+into place. On POSIX that rename is atomic within one filesystem, so a reader
+never observes a partially published checkpoint, and a process killed before
+the rename leaves the canonical file untouched and at worst a stale `.tmp`
+file, which the loader ignores. The guarantee is per filesystem: a move across
+filesystems is a copy, filesystems without an atomic rename do not provide it,
+and power loss during the write is not covered. A checkpoint carries no
+checksum, no integrity manifest, and no completion marker, and it is not
+authenticated: a damaged file is detected when it fails to deserialize, not
+before. The run store is the mechanism that adds digests, manifests, and
+completion markers — to the run *history*, not to the restart state.
 """
 function save_checkpoint(state::ABCSMCState, dir::AbstractString)
     mkpath(dir)

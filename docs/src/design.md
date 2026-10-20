@@ -73,7 +73,7 @@ The Gaussian perturbation kernel is fully normalized:
 
 This is numerically identical to `Distributions.logpdf(MvNormal(μ, Σ), x)` (unit-tested in 1-D and 2-D). Proper normalization matters because the kernel appears in the importance-weight denominator — an unnormalized kernel would bias the posterior.
 
-## 6. Checkpoint portability
+## 6. Checkpoint guarantees
 
 Checkpoints serialize **data only** — never `cfg` and its closures:
 
@@ -81,10 +81,57 @@ Checkpoints serialize **data only** — never `cfg` and its closures:
 data = (θ, w, summaries, dists, ε, gen, ess, base_seed, n_attempts, n_resamples)
 ```
 
-This means:
+What a checkpoint does and does not give you:
 
-- A checkpoint saved with Julia 1.10 can be loaded with Julia 1.11.
-- A checkpoint saved with one version of your model code can be loaded with an updated version — you just reattach the new `cfg`.
-- Checkpoints are safe to copy across filesystems and Slurm nodes.
+- **Exact continuation.** Loaded with a compatible `cfg` in a compatible
+  environment, a checkpoint resumes the run with the same deterministic
+  trajectory as an uninterrupted one — same particles, same weights, same ε.
+  This is the guarantee the checkpoint-resume conformance tests pin down.
+- **Current sampler state, not history.** A checkpoint holds the state of the
+  generations completed so far. It is not a record of the run; for that, see
+  the [run store](runstore.md).
+- **Native format.** The payload is written with Julia's `Serialization`, so a
+  checkpoint is tied to the Julia version that wrote it and to the types it
+  holds. It is not a version-independent or cross-language format, and a
+  checkpoint written before a change to the particle or summary types has to
+  be migrated explicitly.
+- **Configuration reattached by the caller.** `cfg` and its closures are
+  never stored, so the model configuration is reattached on load. The stored
+  *data* still has to be interpretable: if the meaning of a particle or a
+  summary changed, migrate the checkpoint.
+- **Write protocol.** The payload is written to a `.tmp` file and then renamed
+  into place. On POSIX that rename is atomic within one filesystem, so a
+  reader never sees a partially published checkpoint, and a process killed
+  before the rename leaves the canonical file untouched and at worst a stale
+  `.tmp` file, which the loader ignores. The guarantee is per filesystem: a
+  move across filesystems is a copy, filesystems without an atomic rename do
+  not provide it, and power loss during the write is not covered.
+- **No integrity metadata.** A checkpoint carries no checksum, no integrity
+  manifest, and no completion marker, and it is not authenticated. A damaged
+  file is detected when it fails to deserialize, not before.
 
-Atomicity is guaranteed by writing to `.tmp` then renaming (POSIX `rename` is atomic on the same filesystem). A job killed mid-write leaves at worst a stale `.tmp` file, which the loader ignores.
+### Checkpoints and the run store are different mechanisms
+
+The [run store](runstore.md) and the checkpoint answer different questions,
+and neither replaces the other.
+
+**Checkpoint — the exact sampler-restart authority:**
+
+- holds the current sampler state: particles, weights, ε, seeds, counters, and
+  the adaptive runtime state;
+- resumes inference when it is loaded with a compatible `cfg`;
+- is written with Julia's `Serialization`, so it is native and trusted input;
+- carries no checksum, no manifest, and no completion marker.
+
+**Run store — the queryable scientific history:**
+
+- holds the accepted populations and the recorded evaluations of every
+  generation, with provenance, diagnostics, and timings;
+- adds SHA-256 digests, a deterministic manifest per generation, and a
+  `COMPLETE` marker, so corruption and truncation are detected *before* the
+  data is used, and every deserialized record is revalidated against the
+  package's own invariants;
+- is still a native, trusted-input format, not a portable cross-language one,
+  and it is not authenticated either;
+- is **not** sampler-restart state: it does not resume inference, and it does
+  not make a checkpoint verifiable or replace one.
