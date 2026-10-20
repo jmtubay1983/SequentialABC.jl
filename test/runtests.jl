@@ -11,6 +11,7 @@ using Test
     include("test_smc.jl")
     include("adaptive_distance_tests.jl")
     include("evaluation_tests.jl")
+    include("runstore_tests.jl")
     include("conformance_tests.jl")
     include("run_smc_tests.jl")
     include("mcmc_tests.jl")
