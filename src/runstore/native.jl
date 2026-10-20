@@ -39,6 +39,51 @@ const NATIVE_MANIFEST_FILE = "manifest"
 const NATIVE_COMPLETE_FILE = "COMPLETE"
 
 """
+    NATIVE_PUBLICATION_PHASES
+
+The ordered phases of the native publication transaction.
+
+The list mirrors the control flow of `_publish_generation!` exactly; the
+durability tests derive their expectations from it, and a change to the
+publication flow has to change this list with it. The identifiers are
+internal: they are not exported and are not part of the public API.
+"""
+const NATIVE_PUBLICATION_PHASES = (
+    :before_staging,
+    :after_staging_created,
+    :after_population_write,
+    :after_evaluation_write,
+    :after_partition_reopen_validation,
+    :after_digest_computation,
+    :after_manifest_write,
+    :after_complete_write,
+    :after_staging_validation,
+    :before_publish_rename,
+    :after_publish_rename,
+    :after_final_validation,
+)
+
+"""
+    _InjectedInterruption(phase::Symbol)
+
+Internal exception that emulates a crash at a publication phase.
+
+An injected interruption is *not* an ordinary recoverable error: it leaves
+the same evidence behind as a power loss, so the staging directory is not
+cleaned up and the writer lease is not released.
+"""
+struct _InjectedInterruption <: Exception
+    phase::Symbol
+end
+
+Base.showerror(io::IO, e::_InjectedInterruption) = print(
+    io, "_InjectedInterruption: simulated crash at publication phase $(e.phase)")
+
+# The fault injector is consulted once per publication phase. With no
+# injector (the production case) this is a single `nothing` comparison.
+# (Defined after the store type, which it refers to.)
+
+"""
     NativeRunStore <: AbstractRunStore
 
 File-backed run store.
@@ -59,6 +104,7 @@ Fields:
   - `pending_keys::Set{EvaluationKey}` — their identities
   - `lease_path::Union{Nothing,String}` — the writer lease this store owns
   - `closed::Bool`             — whether the store was closed
+  - `fault`                    — internal fault injector; `nothing` in production
 
 Open a store with [`open_run`](@ref) and close it with [`close_run!`](@ref).
 A store in write mode owns the writer lease for the whole session and
@@ -78,13 +124,56 @@ mutable struct NativeRunStore <: AbstractRunStore
     pending_keys::Set{EvaluationKey}
     lease_path::Union{Nothing,String}
     closed::Bool
+    fault::Any
 end
 
 function NativeRunStore(root::AbstractString, metadata::RunMetadata, mode::Symbol)
     return NativeRunStore(
         abspath(root), metadata, mode, nothing, nothing,
-        EvaluationRecord[], Set{EvaluationKey}(), nothing, false,
+        EvaluationRecord[], Set{EvaluationKey}(), nothing, false, nothing,
     )
+end
+
+# The positional constructor that existed before the internal fault hook was
+# introduced; it keeps the previous construction surface intact.
+function NativeRunStore(root::AbstractString, metadata::RunMetadata, mode::Symbol,
+                         pending_generation::Union{Nothing,Int64},
+                         pending_population::Union{Nothing,PopulationRecord},
+                         pending_evaluations::Vector{EvaluationRecord},
+                         pending_keys::Set{EvaluationKey},
+                         lease_path::Union{Nothing,String},
+                         closed::Bool)
+    return NativeRunStore(
+        abspath(root), metadata, mode, pending_generation, pending_population,
+        pending_evaluations, pending_keys, lease_path, closed, nothing,
+    )
+end
+
+"""
+    _native_runstore(root, metadata, mode; fault=nothing) -> NativeRunStore
+
+Internal constructor of a native store with an optional fault injector.
+
+The injector is a callable that receives a publication phase symbol. It is
+used by the durability tests to simulate a crash at a chosen point of the
+publication transaction. It is not part of the public API: the public
+[`initialize_run!`](@ref) and [`open_run`](@ref) never set it, and it is not
+exported.
+"""
+function _native_runstore(root::AbstractString, metadata::RunMetadata, mode::Symbol;
+                          fault::Any = nothing)
+    store = NativeRunStore(root, metadata, mode)
+    store.fault = fault
+    return store
+end
+
+# The fault injector is consulted once per publication phase. With no
+# injector (the production case) this is a single `nothing` comparison.
+function _fault!(store::NativeRunStore, phase::Symbol)
+    injector = store.fault
+    injector === nothing && return nothing
+    injector(phase)
+    return nothing
 end
 
 Base.show(io::IO, store::NativeRunStore) = print(
@@ -535,14 +624,29 @@ function finalize_generation!(store::NativeRunStore, generation::Integer;
         isempty(extra_keys) || throw(UnexpectedEvaluation(extra_keys))
     end
 
-    completion = _publish_generation!(store, gen, population, records,
-                                      expected_evaluations)
+    completion = try
+        _publish_generation!(store, gen, population, records, expected_evaluations)
+    catch
+        # The publication may have completed before the interruption was
+        # reported. The pending records are then stale — the generation is
+        # already committed — so they are dropped instead of being published
+        # a second time.
+        if gen in Set(_native_committed_generations(store))
+            _clear_pending!(store)
+        end
+        rethrow()
+    end
 
+    _clear_pending!(store)
+    return completion
+end
+
+function _clear_pending!(store::NativeRunStore)
     store.pending_generation = nothing
     store.pending_population = nothing
     empty!(store.pending_evaluations)
     empty!(store.pending_keys)
-    return completion
+    return store
 end
 
 function _publish_generation!(store::NativeRunStore,
@@ -556,9 +660,11 @@ function _publish_generation!(store::NativeRunStore,
     final_dir = _native_generation_dir(root, generation)
     isdir(final_dir) && throw(TargetExists(final_dir))
 
+    _fault!(store, :before_staging)
     mkpath(staging)
     published = false
     try
+        _fault!(store, :after_staging_created)
         population_path = joinpath(staging, NATIVE_POPULATION_FILE)
         evaluation_path = joinpath(staging, NATIVE_EVALUATION_FILE)
 
@@ -570,6 +676,7 @@ function _publish_generation!(store::NativeRunStore,
                 store.metadata.run_id, generation, 1, now(UTC)),
             [population],
         )
+        _fault!(store, :after_population_write)
         _write_partition(
             evaluation_path,
             NativePartitionHeader(
@@ -577,17 +684,20 @@ function _publish_generation!(store::NativeRunStore,
                 store.metadata.run_id, generation, length(ordered), now(UTC)),
             ordered,
         )
+        _fault!(store, :after_evaluation_write)
 
         # Reopen the staged partitions and revalidate them.
         _verify_partition(population_path, store.metadata.run_id, generation,
                           :population, 1)
         _verify_partition(evaluation_path, store.metadata.run_id, generation,
                           :evaluations, length(ordered))
+        _fault!(store, :after_partition_reopen_validation)
 
         population_digest = _file_digest(population_path)
         population_bytes = filesize(population_path)
         evaluation_digest = _file_digest(evaluation_path)
         evaluation_bytes = filesize(evaluation_path)
+        _fault!(store, :after_digest_computation)
         key_set_digest = _evaluation_key_set_hash(
             EvaluationKey(r) for r in ordered)
         plan_digest = expected_evaluations === nothing ? nothing :
@@ -624,6 +734,7 @@ function _publish_generation!(store::NativeRunStore,
         _write_canonical_kv(manifest_path, manifest_entries)
         manifest_digest = _file_digest(manifest_path)
         _read_manifest(manifest_path)
+        _fault!(store, :after_manifest_write)
 
         complete_path = joinpath(staging, NATIVE_COMPLETE_FILE)
         _write_canonical_kv(
@@ -638,23 +749,32 @@ function _publish_generation!(store::NativeRunStore,
                 "completed_at" => _native_timestamp(now(UTC)),
             ],
         )
+        _fault!(store, :after_complete_write)
 
         # Validate the whole staging directory before it becomes canonical.
         _verify_generation_directory(store, staging, generation)
+        _fault!(store, :after_staging_validation)
 
         isdir(final_dir) && throw(TargetExists(final_dir))
+        _fault!(store, :before_publish_rename)
         _move_directory(staging, final_dir)
         published = true
+        _fault!(store, :after_publish_rename)
 
         _verify_generation_directory(store, final_dir, generation)
-    finally
-        if !published && isdir(staging)
+        _fault!(store, :after_final_validation)
+    catch err
+        # An injected interruption emulates a crash: the staging directory
+        # stays behind, exactly as it would after a power loss. An ordinary
+        # error keeps the current cleanup.
+        if !published && isdir(staging) && !(err isa _InjectedInterruption)
             try
                 rm(staging; recursive = true, force = true)
             catch
                 # A leftover staging directory is reported by `validate_store`.
             end
         end
+        rethrow()
     end
 
     return GenerationCompletion(
@@ -676,7 +796,15 @@ end
 # file written by another build (or by hand) can hold a record that violates
 # the current invariants. Rebuilding the record through its constructor
 # re-checks them; a violation is a corrupt store, not a record to be used.
-function _revalidate_population(record::PopulationRecord,
+# Deserialization reconstructs a struct without running its constructor, so a
+# file written by another build (or by hand) can hold a record that violates
+# the current invariants. Rebuilding the record through its constructor
+# re-checks them; a violation is a corrupt store, not a record to be used.
+#
+# The argument is deliberately untyped: the *stored* representation is not
+# trusted either, and only the rebuilt record — the one the constructor
+# accepted — is ever handed out.
+function _revalidate_population(record,
                                 run_id::AbstractString,
                                 generation::Int64,
                                 path::AbstractString)
@@ -694,7 +822,7 @@ function _revalidate_population(record::PopulationRecord,
     end
 end
 
-function _revalidate_evaluation(record::EvaluationRecord,
+function _revalidate_evaluation(record,
                                 run_id::AbstractString,
                                 generation::Int64,
                                 path::AbstractString)
@@ -885,14 +1013,21 @@ function read_population(store::NativeRunStore, generation::Integer)
         store.metadata.run_id, gen, population_path,
         "the population partition holds $(length(records)) record(s)"))
     record = records[1]
+    record = _revalidate_population(record, store.metadata.run_id, gen,
+                                    population_path)
     record isa PopulationRecord || throw(CorruptStore(
         store.metadata.run_id, gen, population_path,
         "the partition does not hold a population"))
     record.generation == gen || throw(CorruptStore(
         store.metadata.run_id, gen, population_path,
         "the population belongs to generation $(record.generation)"))
-    record = _revalidate_population(record, store.metadata.run_id, gen,
-                                    population_path)
+    claimed = tryparse(Int, get(manifest, "population_count", ""))
+    claimed === nothing && throw(CorruptStore(
+        store.metadata.run_id, gen, population_path,
+        "the manifest does not record a valid population count"))
+    claimed == 1 || throw(CorruptStore(
+        store.metadata.run_id, gen, population_path,
+        "the manifest records $(claimed) population(s) but a generation holds one"))
     return copy(record)
 end
 
@@ -945,13 +1080,33 @@ function read_evaluations(
         manifest = _verify_generation_directory(store, directory, gen)
         _verify_generation_data(store, directory, gen, manifest)
         evaluation_path = joinpath(directory, get(manifest, "evaluation_file", ""))
+        # The identities are hashed while the records stream past, so the
+        # manifest's identity digest is verified without holding the keys in
+        # memory. The stream must be in the canonical order, which the
+        # ordering check below enforces.
+        key_context = _evaluation_key_hash_context()
+        previous_key = nothing
+        streamed = 0
         _each_partition_record(evaluation_path, store.metadata.run_id, gen,
                                :evaluations) do record
+            record = _revalidate_evaluation(record, store.metadata.run_id, gen,
+                                           evaluation_path)
             record isa EvaluationRecord || throw(CorruptStore(
                 store.metadata.run_id, gen, evaluation_path,
                 "the partition does not hold evaluations"))
-            record = _revalidate_evaluation(record, store.metadata.run_id, gen,
-                                           evaluation_path)
+            key = EvaluationKey(record)
+            if previous_key !== nothing
+                key == previous_key && throw(CorruptStore(
+                    store.metadata.run_id, gen, evaluation_path,
+                    "duplicate evaluation identity $(key)"))
+                key < previous_key && throw(CorruptStore(
+                    store.metadata.run_id, gen, evaluation_path,
+                    "the evaluations are not stored in the canonical order"))
+            end
+            previous_key = key
+            _evaluation_key_hash_update!(key_context, key)
+            streamed += 1
+
             _matches_index(record.context.particle, particle) || return nothing
             _matches_index(record.context.proposal, proposal) || return nothing
             _matches_index(record.context.attempt, attempt) || return nothing
@@ -966,9 +1121,35 @@ function read_evaluations(
             push!(out, copy(record))
             return nothing
         end
+        _verify_record_counts(store, gen, manifest, evaluation_path, streamed)
+        expected_digest = get(manifest, "evaluation_key_set_sha256", "")
+        if !isempty(expected_digest)
+            digest = _evaluation_key_hash_finalize(key_context)
+            digest == expected_digest || throw(ChecksumMismatch(
+                store.metadata.run_id, gen, evaluation_path,
+                expected_digest, digest))
+        end
     end
     sort!(out; by = r -> (r.context.generation, EvaluationKey(r)))
     return out
+end
+
+# The number of records the manifest claims must match the number of records
+# the partition holds.
+function _verify_record_counts(store::NativeRunStore,
+                               generation::Int64,
+                               manifest,
+                               path::AbstractString,
+                               streamed::Int)
+    claimed = tryparse(Int, get(manifest, "evaluation_count", ""))
+    claimed === nothing && throw(CorruptStore(
+        store.metadata.run_id, generation, path,
+        "the manifest does not record a valid evaluation count"))
+    claimed == streamed || throw(CorruptStore(
+        store.metadata.run_id, generation, path,
+        "the manifest records $(claimed) evaluation(s) but the partition holds " *
+        "$(streamed)"))
+    return nothing
 end
 
 """
@@ -1175,7 +1356,16 @@ function validate_store(store::NativeRunStore)
     for entry in readdir(_native_generations_dir(store.root))
         matched = match(r"^generation_(\d{6})$", entry)
         if matched === nothing
-            push!(warnings, "unexpected entry $(entry) in the generations directory")
+            # A name that looks like a generation but is not canonical is a
+            # malformed generation directory, not a harmless extra file: it
+            # makes the generation inventory ambiguous.
+            if startswith(entry, "generation_")
+                push!(errors, string(
+                    "the generation directory ", entry, " is malformed; ",
+                    "generation directories are named generation_<six digits>"))
+            else
+                push!(warnings, "unexpected entry $(entry) in the generations directory")
+            end
             continue
         end
         generation = parse(Int64, matched.captures[1])

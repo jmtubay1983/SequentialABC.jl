@@ -128,6 +128,21 @@ function _file_digest(path::AbstractString)
 end
 
 """
+    _evaluation_key_line(key::EvaluationKey) -> String
+
+The canonical one-line encoding of an evaluation identity.
+
+The method name is percent-encoded, so the line can never contain an
+ambiguous separator. The encoding is the one that the evaluation-key-set
+digest is defined over.
+"""
+function _evaluation_key_line(key::EvaluationKey)
+    return string(_canonical_encode(string(key.method)), "|", key.generation, "|",
+                  key.particle, "|", key.proposal, "|", key.attempt, "|",
+                  key.replicate, "\n")
+end
+
+"""
     _evaluation_key_set_hash(keys) -> String
 
 A deterministic digest of a set of evaluation identities.
@@ -138,13 +153,43 @@ to detect missing or extra evaluations of a generation, both at publication
 and at reopen.
 """
 function _evaluation_key_set_hash(keys)
-    io = IOBuffer()
+    context = SHA.SHA2_256_CTX()
     for key in sort!(collect(keys))
-        print(io, _canonical_encode(string(key.method)), "|", key.generation, "|",
-              key.particle, "|", key.proposal, "|", key.attempt, "|",
-              key.replicate, "\n")
+        SHA.update!(context, Vector{UInt8}(codeunits(_evaluation_key_line(key))))
     end
-    return SHA.bytes2hex(SHA.sha256(take!(io)))
+    return SHA.bytes2hex(SHA.digest!(context))
+end
+
+"""
+    _evaluation_key_hash_context()
+
+An incremental digest context for the evaluation-key-set hash.
+
+A reader that streams the records of a generation can hash the identities
+as it goes, without holding them in memory, provided the stream is in the
+canonical order — which the reader verifies.
+"""
+function _evaluation_key_hash_context()
+    return SHA.SHA2_256_CTX()
+end
+
+"""
+    _evaluation_key_hash_update!(context, key::EvaluationKey)
+
+Add one evaluation identity to an incremental key-set digest.
+"""
+function _evaluation_key_hash_update!(context, key::EvaluationKey)
+    SHA.update!(context, Vector{UInt8}(codeunits(_evaluation_key_line(key))))
+    return context
+end
+
+"""
+    _evaluation_key_hash_finalize(context) -> String
+
+Finish an incremental key-set digest.
+"""
+function _evaluation_key_hash_finalize(context)
+    return SHA.bytes2hex(SHA.digest!(context))
 end
 
 """
