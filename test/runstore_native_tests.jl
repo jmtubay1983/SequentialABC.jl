@@ -9,113 +9,15 @@ import SHA
 # The backend-independent conformance suite lives in its own file so that the
 # in-memory and the native backend are held to the same contract.
 isdefined(Main, :run_store_conformance_suite) || include("runstore_conformance.jl")
+# The shared, test-only mutation helpers live in their own file so that the
+# durability suite and this file use one implementation.
+isdefined(Main, :native_test_directory) || include("runstore_native_helpers.jl")
 
 # Every native store is created in its own directory, and the directories are
 # removed when the file finishes.
-const NATIVE_TEST_DIRECTORIES = String[]
-
 function native_test_store(metadata::RunMetadata; mode::Symbol = :write)
-    directory = mktempdir(; cleanup = false)
-    push!(NATIVE_TEST_DIRECTORIES, directory)
+    directory = native_test_directory()
     return initialize_run!(NativeRunStore, directory; metadata=metadata)
-end
-
-native_generation_dir(root::AbstractString, generation::Integer) =
-    joinpath(root, "generations", "generation_" * lpad(string(generation), 6, '0'))
-
-# Rewrite the digests of a published generation after a file was modified, so
-# that a test can reach the deserializer instead of stopping at the digest
-# check. A consistent manifest and marker with a damaged partition is the
-# worst case the integrity model has to survive.
-function refresh_generation_digests(root::AbstractString, generation::Integer)
-    directory = native_generation_dir(root, generation)
-    manifest_path = joinpath(directory, "manifest")
-    marker_path = joinpath(directory, "COMPLETE")
-    entries = Dict{String,String}()
-    for line in readlines(manifest_path)
-        key, value = split(line, "="; limit = 2)
-        entries[key] = value
-    end
-    for (file_key, digest_key) in (("population_file", "population_sha256"),
-                                   ("evaluation_file", "evaluation_sha256"))
-        path = joinpath(directory, entries[file_key])
-        entries[digest_key] = SHA.bytes2hex(open(SHA.sha256, path))
-        entries[replace(digest_key, "sha256" => "bytes")] =
-            string(filesize(path))
-    end
-    ordered = String[
-        "schema", "version", "run_id", "generation", "metadata_sha256",
-        "population_file", "population_sha256", "population_bytes",
-        "population_count", "evaluation_file", "evaluation_sha256",
-        "evaluation_bytes", "evaluation_count", "evaluation_key_set_sha256",
-        "omission_count", "package_version", "julia_version", "completed_at",
-    ]
-    open(manifest_path, "w") do io
-        for key in ordered
-            haskey(entries, key) && println(io, key, "=", entries[key])
-        end
-    end
-    marker = Dict{String,String}()
-    for line in readlines(marker_path)
-        key, value = split(line, "="; limit = 2)
-        marker[key] = value
-    end
-    marker["manifest_sha256"] = SHA.bytes2hex(open(SHA.sha256, manifest_path))
-    open(marker_path, "w") do io
-        for key in ("schema", "version", "run_id", "generation", "manifest_file",
-                    "manifest_sha256", "completed_at")
-            haskey(marker, key) && println(io, key, "=", marker[key])
-        end
-    end
-    return nothing
-end
-
-# Recompute the manifest digest that the COMPLETE marker records, so that a
-# test can reach the content checks of a manifest instead of stopping at the
-# digest of the marker.
-function refresh_marker_digest(root::AbstractString, generation::Integer)
-    directory = native_generation_dir(root, generation)
-    manifest_path = joinpath(directory, "manifest")
-    marker_path = joinpath(directory, "COMPLETE")
-    marker = Dict{String,String}()
-    for line in readlines(marker_path)
-        key, value = split(line, "="; limit = 2)
-        marker[key] = value
-    end
-    marker["manifest_sha256"] = SHA.bytes2hex(open(SHA.sha256, manifest_path))
-    open(marker_path, "w") do io
-        for key in ("schema", "version", "run_id", "generation", "manifest_file",
-                    "manifest_sha256", "completed_at")
-            haskey(marker, key) && println(io, key, "=", marker[key])
-        end
-    end
-    return nothing
-end
-
-# Replace every occurrence of a floating-point value in a file. This is how a
-# test crafts a partition whose record violates the run-history invariants
-# while the manifest and the marker stay consistent with the file: the
-# deserialized struct bypasses its constructor, so only an explicit
-# re-validation can catch it.
-function patch_float!(path::AbstractString, from::Float64, to::Float64)
-    data = read(path)
-    pattern = collect(reinterpret(UInt8, [from]))
-    replacement = collect(reinterpret(UInt8, [to]))
-    patched = 0
-    index = 1
-    while index + length(pattern) - 1 <= length(data)
-        if data[index:(index + length(pattern) - 1)] == pattern
-            data[index:(index + length(pattern) - 1)] = replacement
-            patched += 1
-            index += length(pattern)
-        else
-            index += 1
-        end
-    end
-    open(path, "w") do io
-        write(io, data)
-    end
-    return patched
 end
 
 @testset "RunStore native store" begin
@@ -434,7 +336,7 @@ end
             open(path, "w") do io
                 write(io, data[1:(end ÷ 2)])
             end
-            refresh_generation_digests(root, 1)
+            refresh_generation_digests!(root, 1)
             @test_throws TruncatedPartition read_evaluations(store)
         finally
             close_run!(store)
@@ -449,7 +351,7 @@ end
             finalize_generation!(store, 1)
             manifest = joinpath(native_generation_dir(root, 1), "manifest")
             write(manifest, "this is not a manifest\n")
-            refresh_marker_digest(root, 1)
+            refresh_marker_digest!(root, 1)
             @test_throws MalformedManifest read_evaluations(store)
         finally
             close_run!(store)
@@ -511,7 +413,7 @@ end
 
             # The two weights are the only 0.5 values in the partition.
             @test patch_float!(path, 0.5, 0.9) == 2
-            refresh_generation_digests(root, 1)
+            refresh_generation_digests!(root, 1)
 
             # The digests are consistent, so only the record invariants can
             # reject the file: the weights are no longer normalized.

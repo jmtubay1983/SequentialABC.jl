@@ -13,6 +13,7 @@ using Test
     include("evaluation_tests.jl")
     include("runstore_tests.jl")
     include("runstore_native_tests.jl")
+    include("runstore_native_fault_tests.jl")
     include("conformance_tests.jl")
     include("run_smc_tests.jl")
     include("mcmc_tests.jl")

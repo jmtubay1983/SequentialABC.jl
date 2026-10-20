@@ -299,6 +299,79 @@ not authentication: a writer that can rewrite the data, the manifest, and
 the marker consistently defeats them. The native store is a tool for
 trusted local files.
 
+**Checksums versus semantic validation.** The two layers answer different
+questions:
+
+* a digest proves that the bytes of a partition are the bytes that were
+  published;
+* the *constructor revalidation* proves that the decoded scientific record
+  still satisfies the run-history invariants.
+
+A partition whose digests are consistent but whose records are invalid — for
+instance a population whose weights are not normalized — is rejected by the
+revalidation, not by a checksum. The store never hands out a record it would
+itself refuse to construct.
+
+### Failure behaviour and recovery
+
+**Staging versus committed.** A generation under `tmp/` is *staged*: it is
+invisible to every reader, it is not part of the generation inventory, and
+it is not a generation of the run. A generation under `generations/` with a
+`COMPLETE` marker is *committed*: it is listed, it is queryable, and it is
+verified on every read.
+
+**A crash before the final rename.** The directory rename is the commit
+point. If the writer stops before it, the staging directory stays behind and
+*no* new generation becomes visible:
+
+* the previously committed generations are byte-identical and remain
+  queryable;
+* `latest_generation` still reports the last committed generation;
+* the staging directory is reported by [`validate_store`](@ref) as a
+  warning;
+* nothing is deleted and nothing is repaired: removing the staging
+  directory is an operator decision, and the store may keep it for
+  inspection;
+* the writer lease of the interrupted session is *not* released
+  automatically — see below.
+
+**A crash after the final rename.** The publication already completed: the
+generation is committed, complete, and visible. Only the acknowledgement was
+interrupted. The store therefore reports the generation as published, the
+pending records of that generation are stale and are dropped, and the
+generation cannot be published a second time — a retry is refused with
+[`GenerationAlreadyComplete`](@ref). This is *not* a failed publication.
+
+**Operator responsibilities.** The store never repairs itself. An operator
+may have to
+
+* remove a leftover staging directory after an interrupted publication;
+* remove a stale writer lease after a crashed writer (below);
+* replace or archive a generation whose files were damaged.
+
+**Corruption is detected, never repaired.** A committed generation whose
+files were damaged fails closed: the read raises a contextual
+[`RunStoreError`](@ref) — [`ChecksumMismatch`](@ref),
+[`TruncatedPartition`](@ref), [`CorruptStore`](@ref),
+[`MissingManifest`](@ref), [`MalformedManifest`](@ref) or
+[`MalformedMarker`](@ref) — and there is never a fallback to an older
+generation. [`validate_store`](@ref) reports the damage and leaves every
+artifact untouched.
+
+**No protection against a malicious writer.** The digests detect accidental
+damage, not a writer that rewrites the data, the manifest, and the marker
+consistently. The store does not attempt to defend against that, and it does
+not authenticate the run.
+
+**No restart claim.** A damaged or missing generation costs history, not
+the run: the sampler is restarted from a checkpoint, never from the store.
+
+**Pending records remain nondurable.** The records of a generation that is
+being written live in the store session until
+[`finalize_generation!`](@ref) publishes it. A crash loses them, exactly as
+it loses the generation, and the generation is recomputed from its
+deterministic seeds.
+
 ### Native format, trusted input only
 
 The `.jls` partitions use Julia `Serialization`. They are native to Julia and
@@ -308,6 +381,13 @@ portable export format. Summaries and provenance are canonical
 [`RecordedValue`](@ref) trees and are therefore always readable; particles
 are native, so a population whose particle types no longer exist can become
 unreadable.
+
+Because `Serialization` is not safe against a corrupted *type* header — a
+damaged header can crash the process instead of raising a catchable error —
+the store verifies every digest **before** it deserializes anything.
+Accidental damage is therefore rejected without ever reaching the
+deserializer; only a writer that rewrites the digests consistently can get
+there, which is why the format is documented as trusted-input only.
 
 Portable, untrusted interchange belongs to a later export layer. There is
 none yet.
