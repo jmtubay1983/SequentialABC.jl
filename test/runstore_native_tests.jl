@@ -92,6 +92,32 @@ function refresh_marker_digest(root::AbstractString, generation::Integer)
     return nothing
 end
 
+# Replace every occurrence of a floating-point value in a file. This is how a
+# test crafts a partition whose record violates the run-history invariants
+# while the manifest and the marker stay consistent with the file: the
+# deserialized struct bypasses its constructor, so only an explicit
+# re-validation can catch it.
+function patch_float!(path::AbstractString, from::Float64, to::Float64)
+    data = read(path)
+    pattern = collect(reinterpret(UInt8, [from]))
+    replacement = collect(reinterpret(UInt8, [to]))
+    patched = 0
+    index = 1
+    while index + length(pattern) - 1 <= length(data)
+        if data[index:(index + length(pattern) - 1)] == pattern
+            data[index:(index + length(pattern) - 1)] = replacement
+            patched += 1
+            index += length(pattern)
+        else
+            index += 1
+        end
+    end
+    open(path, "w") do io
+        write(io, data)
+    end
+    return patched
+end
+
 @testset "RunStore native store" begin
 
     @testset "initialization and layout" begin
@@ -469,6 +495,30 @@ end
             @test isempty(read_evaluations(store))
             @test_throws IncompleteGeneration read_evaluations(store; generation=1)
             @test_throws IncompleteGeneration read_population(store, 1)
+        finally
+            close_run!(store)
+        end
+    end
+
+    @testset "a record that violates the invariants is rejected" begin
+        store = native_test_store(rs_metadata())
+        root = store.root
+        try
+            write_population!(store, rs_population())
+            write_evaluation!(store, EvaluationRecord(rs_success(rs_context())))
+            finalize_generation!(store, 1)
+            path = joinpath(native_generation_dir(root, 1), "population.jls")
+
+            # The two weights are the only 0.5 values in the partition.
+            @test patch_float!(path, 0.5, 0.9) == 2
+            refresh_generation_digests(root, 1)
+
+            # The digests are consistent, so only the record invariants can
+            # reject the file: the weights are no longer normalized.
+            @test_throws CorruptStore read_population(store, 1)
+            report = validate_store(store)
+            @test !report.valid
+            @test any(e -> occursin("invariants", e), report.errors)
         finally
             close_run!(store)
         end
