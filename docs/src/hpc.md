@@ -64,12 +64,21 @@ Stale `.tmp` files are ignored by `list_checkpoints` and `load_latest_state`. Yo
 
 ## 5. Preemption safety
 
-Checkpoints use **atomic write**:
+Checkpoints are written with a temporary file and a rename:
 
 1. Serialize data to `state_gen_XXX.jls.tmp`
-2. `mv(tmp, path)` — POSIX rename is atomic on the same filesystem
+2. `mv(tmp, path)` — on POSIX, a rename within one filesystem is atomic, so a
+   reader never sees a partially published checkpoint
 
-A job killed mid-write can never leave a corrupted checkpoint — at worst a stale `.tmp` file. The next `save_checkpoint` will overwrite it.
+If a job is killed before that rename, the canonical checkpoint is untouched
+and the only leftover is a stale `.tmp` file, which the loader ignores; the
+next `save_checkpoint` overwrites it. The guarantee is per filesystem: a move
+across filesystems is a copy, filesystems without an atomic rename do not
+provide it, and power loss during the write is not covered. Checkpoints carry
+no checksum, so a damaged checkpoint is detected when it fails to load, not
+before. The [run store](runstore.md) is the mechanism that adds digests,
+manifests, and completion markers — to the run *history*, not to the restart
+state.
 
 ## 6. Recommended Slurm script
 
