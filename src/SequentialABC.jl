@@ -7,6 +7,11 @@ using Distributions
 using StatsBase
 using Statistics
 using LogExpFunctions
+# SHA exports `update!`, which this package also defines, so the standard
+# libraries are imported rather than used: their names never enter the
+# namespace of the package.
+import SHA
+import Sockets
 
 include("simulator.jl")
 include("config.jl")
@@ -257,6 +262,26 @@ export ABCSimulator,
        MissingPopulation,
        MissingExpectedEvaluation,
        UnexpectedEvaluation,
-       MethodMismatch
+       MethodMismatch,
+       # Native, file-backed run store.
+       NativeRunStore,
+       close_run!,
+       MissingRunStoreSchema,
+       MalformedSchemaFile,
+       WriterAlreadyActive,
+       StaleWriterLease,
+       CrossDeviceStaging,
+       TargetExists,
+       IncompleteGeneration,
+       CorruptStore,
+       ChecksumMismatch,
+       TruncatedPartition,
+       MissingManifest,
+       MalformedManifest,
+       MalformedMarker,
+       OrphanFile,
+       PendingGenerationConflict,
+       StoreClosed,
+       ReadOnlyRunStore
 
 end
