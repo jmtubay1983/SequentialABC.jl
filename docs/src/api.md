@@ -269,6 +269,25 @@ MissingPopulation
 MissingExpectedEvaluation
 UnexpectedEvaluation
 MethodMismatch
+NativeRunStore
+close_run!
+MissingRunStoreSchema
+MalformedSchemaFile
+WriterAlreadyActive
+StaleWriterLease
+CrossDeviceStaging
+TargetExists
+IncompleteGeneration
+CorruptStore
+ChecksumMismatch
+TruncatedPartition
+MissingManifest
+MalformedManifest
+MalformedMarker
+OrphanFile
+PendingGenerationConflict
+StoreClosed
+ReadOnlyRunStore
 ```
 
 ## Checkpointing
