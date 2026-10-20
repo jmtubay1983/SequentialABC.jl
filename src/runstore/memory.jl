@@ -144,11 +144,21 @@ function open_run(store::MemoryRunStore; metadata::RunMetadata)
     return store
 end
 
+"""
+    close_run!(store::MemoryRunStore) -> Nothing
+
+Release an in-memory run store.
+
+The in-memory backend holds no external resource: there is no writer lease
+and no pending state that outlives the process, so this is a no-op that
+exists so that both backends share one lifecycle.
+"""
+close_run!(store::MemoryRunStore) = nothing
+
 # --- writing ----------------------------------------------------------------
 
 function _next_writable_generation(store::MemoryRunStore)
-    latest = latest_generation(store)
-    return latest === nothing ? Int64(1) : latest + 1
+    return _next_writable_generation(store.complete)
 end
 
 """
@@ -301,7 +311,7 @@ function read_evaluations(
     min_wall_time_s=nothing,
     max_wall_time_s=nothing,
 )
-    generations_to_read = _selected_generations(store, generation)
+    generations_to_read = _selected_generations(store.complete, generation)
     min_t = _checked_bound(min_wall_time_s, "min_wall_time_s")
     max_t = _checked_bound(max_wall_time_s, "max_wall_time_s")
     min_t === nothing || max_t === nothing || min_t <= max_t || throw(ArgumentError(
@@ -326,50 +336,6 @@ function read_evaluations(
     end
     sort!(out; by = r -> (r.context.generation, EvaluationKey(r)))
     return out
-end
-
-function _selected_generations(store::MemoryRunStore, generation)
-    generation === nothing && return sort!(collect(store.complete))
-    if generation isa Integer
-        gen = _checked_int64(generation, "generation")
-        gen in store.complete || throw(MissingGeneration(gen))
-        return [gen]
-    end
-    gens = Int64[]
-    for g in generation
-        gen = _checked_int64(g, "generation")
-        gen in store.complete || throw(MissingGeneration(gen))
-        push!(gens, gen)
-    end
-    return sort!(unique(gens))
-end
-
-function _matches_index(value::Int64, filter)
-    filter === nothing && return true
-    filter isa Integer && return value == filter
-    return value in filter
-end
-
-function _matches_symbol(value::Symbol, filter)
-    filter === nothing && return true
-    filter isa Symbol && return value === filter
-    return value in filter
-end
-
-function _matches_failure_category(record::EvaluationRecord, filter)
-    filter === nothing && return true
-    category = record.failure === nothing ? nothing : record.failure.category
-    category === nothing && return false
-    filter isa Symbol && return category === filter
-    return category in filter
-end
-
-function _checked_bound(value, name::AbstractString)
-    value === nothing && return nothing
-    v = Float64(value)
-    isfinite(v) && v >= 0.0 || throw(ArgumentError(
-        "$(name) must be finite and >= 0, got $(v)"))
-    return v
 end
 
 # --- store-level accessors --------------------------------------------------

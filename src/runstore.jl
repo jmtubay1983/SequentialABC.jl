@@ -29,7 +29,12 @@
 # implements the same semantics on top of these types.
 
 include("runstore/errors.jl")
+include("runstore/native_errors.jl")
 include("runstore/values.jl")
 include("runstore/metadata.jl")
 include("runstore/records.jl")
+include("runstore/filters.jl")
+include("runstore/canonical.jl")
+include("runstore/partition.jl")
 include("runstore/memory.jl")
+include("runstore/native.jl")
