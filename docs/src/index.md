@@ -15,7 +15,7 @@ SequentialABC.jl is a Julia implementation of the Toni et al. (2009) ABC‑SMC a
 | Feature | Why it matters |
 |---------|----------------|
 | ✅ Deterministic RNG | Every random draw is seeded from `(gen, i, attempt, role, base_seed)` — runs are bit-identical across restarts, nodes, and Julia sessions. |
-| ✅ Restartable checkpoints | Atomic `save_checkpoint` / `load_latest_state` let you resume long runs after preemption, with no data loss. |
+| ✅ Restartable checkpoints | `save_checkpoint` / `load_latest_state` write a temporary file and rename it into place, so a job killed before the rename keeps the last checkpoint intact and you resume a long run after preemption without losing the completed generations. |
 | ✅ No global RNG | All RNGs are passed explicitly — safe for Slurm array jobs and parallel workers. |
 | ✅ Systematic resampling | Lowest-variance standard resampling scheme, unit-tested against uniformity and point-mass cases. |
 | ✅ Kernel normalization | Gaussian perturbation kernel exactly matches `Distributions.logpdf(MvNormal)`. |

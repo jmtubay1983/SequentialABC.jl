@@ -15,9 +15,11 @@ faithfully, with the practical features real simulation studies need:
 - **Redraw-until-accepted** populations (no zero-weight particles; ESS and
   population size are always well-defined).
 - **Systematic resampling** when ESS < N/2.
-- **Atomic, generation-indexed checkpointing** — restart-safe under job
-  preemption; checkpoints store *data only*, so you can revise your simulator
-  code between restarts.
+- **Generation-indexed checkpointing** — written to a temporary file and renamed
+  into place, so a job killed before the rename keeps the last checkpoint
+  intact; checkpoints store *data only*, so you can revise your simulator code
+  between restarts (the stored data must still be interpretable, and the file
+  is native to the Julia version that wrote it).
 - **Adaptive (quantile) and fixed ε schedules**.
 - **Pluggable simulators** — one abstraction for agent-based (Agents.jl) and
   continuous (ODE/PDE/SSA) models.
@@ -80,7 +82,7 @@ run_smc!(state, Y_OBS; T = 10, schedule = QuantileSchedule(0.5),
 | `initialize!(state, s_obs; max_attempts)` | Generation 1 from the prior, redraw-until-accepted, uniform weights. |
 | `run_generation!(state, s_obs; ε, M, max_attempts)` | One ABC-SMC generation (ancestor resampling → perturb → simulate → accept/reweight → maybe resample). |
 | `run_smc!(state, s_obs; T, schedule, M, max_attempts, checkpoint_dir)` | Full sequential run; checkpoints after every generation when `checkpoint_dir` is set. |
-| `save_checkpoint(state, dir)` / `load_checkpoint(path, cfg)` / `load_latest_state(dir, cfg)` / `list_checkpoints(dir)` | Atomic (`tmp` → `rename`) generation-indexed checkpointing. Data-only: reattach `cfg` on load. |
+| `save_checkpoint(state, dir)` / `load_checkpoint(path, cfg)` / `load_latest_state(dir, cfg)` / `list_checkpoints(dir)` | Generation-indexed checkpointing (`tmp` → `rename`). Data-only: reattach a compatible `cfg` on load. Native `Serialization` format, no checksum. |
 | `FixedSchedule(εs)` / `QuantileSchedule(q)` / `epsilon_quantile(state, q)` | Callable `(state, t) -> ε_t` schedules. Toni-style fixed, or adaptive q-quantile of the previous population's distances (monotone by construction). |
 | `systematic_resample(w, rng)` / `ess(w)` / `importance_weight(cfg, θ, θ_prev, w_prev)` | Low-variance resampling, ESS, and Toni et al. importance weights (log-space). |
 

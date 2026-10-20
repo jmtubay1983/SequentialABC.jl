@@ -292,6 +292,12 @@ ReadOnlyRunStore
 
 ## Checkpointing
 
+A checkpoint is the **exact sampler-restart authority**: it holds the current
+sampler state, it is written with Julia's `Serialization` (native, trusted
+input), and the caller reattaches a compatible `cfg` on load. It carries no
+checksum, no integrity manifest, and no completion marker — for the queryable,
+integrity-checked run *history*, see the [run store](runstore.md).
+
 ```@autodocs
 Modules = [SequentialABC]
 Order = [:function]
