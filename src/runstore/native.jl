@@ -672,6 +672,51 @@ function _count_omissions(records)
     return count
 end
 
+# Deserialization reconstructs a struct without running its constructor, so a
+# file written by another build (or by hand) can hold a record that violates
+# the current invariants. Rebuilding the record through its constructor
+# re-checks them; a violation is a corrupt store, not a record to be used.
+function _revalidate_population(record::PopulationRecord,
+                                run_id::AbstractString,
+                                generation::Int64,
+                                path::AbstractString)
+    try
+        return PopulationRecord(
+            record.generation, record.particles, record.weights,
+            record.distances, record.epsilon, record.ess, record.attempts,
+            record.ancestry, record.resampling_count, record.adaptive,
+            record.started_at, record.finished_at, record.provenance)
+    catch err
+        throw(CorruptStore(
+            run_id, generation, path,
+            "the population record violates the run-history invariants " *
+            "($(sprint(showerror, err)))"))
+    end
+end
+
+function _revalidate_evaluation(record::EvaluationRecord,
+                                run_id::AbstractString,
+                                generation::Int64,
+                                path::AbstractString)
+    try
+        context = EvaluationContext(
+            record.context.method, record.context.generation,
+            record.context.particle, record.context.proposal,
+            record.context.attempt, record.context.replicate,
+            record.context.seed, record.context.base_seed)
+        summary = SummaryCapture(record.summary.state, record.summary.value,
+                                 record.summary.type_name, record.summary.reason)
+        provenance = RecordedProvenance(record.provenance.entries)
+        return EvaluationRecord(context, record.status, summary, record.failure,
+                                record.wall_time_s, provenance, record.discrepancy)
+    catch err
+        throw(CorruptStore(
+            run_id, generation, path,
+            "the evaluation record violates the run-history invariants " *
+            "($(sprint(showerror, err)))"))
+    end
+end
+
 function _verify_partition(path::AbstractString,
                            run_id::AbstractString,
                            generation::Int64,
@@ -689,11 +734,13 @@ function _verify_partition(path::AbstractString,
         record.generation == generation || throw(CorruptStore(
             run_id, generation, path,
             "the population belongs to generation $(record.generation)"))
+        _revalidate_population(record, run_id, generation, path)
     else
         previous = nothing
         for record in records
             record isa EvaluationRecord || throw(CorruptStore(
                 run_id, generation, path, "the partition does not hold evaluations"))
+            _revalidate_evaluation(record, run_id, generation, path)
             key = EvaluationKey(record)
             previous !== nothing && key == previous && throw(CorruptStore(
                 run_id, generation, path, "duplicate evaluation identity $(key)"))
@@ -844,6 +891,8 @@ function read_population(store::NativeRunStore, generation::Integer)
     record.generation == gen || throw(CorruptStore(
         store.metadata.run_id, gen, population_path,
         "the population belongs to generation $(record.generation)"))
+    record = _revalidate_population(record, store.metadata.run_id, gen,
+                                    population_path)
     return copy(record)
 end
 
@@ -901,6 +950,8 @@ function read_evaluations(
             record isa EvaluationRecord || throw(CorruptStore(
                 store.metadata.run_id, gen, evaluation_path,
                 "the partition does not hold evaluations"))
+            record = _revalidate_evaluation(record, store.metadata.run_id, gen,
+                                           evaluation_path)
             _matches_index(record.context.particle, particle) || return nothing
             _matches_index(record.context.proposal, proposal) || return nothing
             _matches_index(record.context.attempt, attempt) || return nothing
